@@ -220,19 +220,30 @@ def parse_laws(xml_str: str, whitelist=None):
 # ---------------------------------------------------------------------------
 # 下載 / 讀取
 # ---------------------------------------------------------------------------
-def load_xml(xml_path: Optional[str] = None) -> str:
-    """優先吃本地檔（--xml 或 CORPUS_XML_PATH），否則才連網下載 RAW XML。"""
-    path = xml_path or os.getenv("CORPUS_XML_PATH")
-    if path:
-        return Path(path).read_text(encoding="utf-8")
-    print(f"未提供本地 XML，連網下載：{RAW_XML_URL}")
-    with urllib.request.urlopen(RAW_XML_URL, timeout=120) as resp:
-        raw = resp.read()
-    # RAW XML 可能為 big5/utf-8；先試 utf-8，失敗退 big5
+def _decode_bytes(raw: bytes) -> str:
+    """RAW XML bytes → str：先試 utf-8，失敗退 big5。
+
+    全國法規資料庫 RAW XML 實務上常為 Big5。本地檔與網路下載共用此函式，
+    確保兩條路徑解碼行為一致（避免本地路徑寫死 utf-8 而對 Big5 檔炸掉）。
+    """
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return raw.decode("big5", errors="replace")
+
+
+def load_xml(xml_path: Optional[str] = None) -> str:
+    """優先吃本地檔（--xml 或 CORPUS_XML_PATH），否則才連網下載 RAW XML。
+
+    兩條路徑都讀 bytes 後交給 _decode_bytes，共用 utf-8 → big5 fallback。
+    """
+    path = xml_path or os.getenv("CORPUS_XML_PATH")
+    if path:
+        return _decode_bytes(Path(path).read_bytes())
+    print(f"未提供本地 XML，連網下載：{RAW_XML_URL}")
+    with urllib.request.urlopen(RAW_XML_URL, timeout=120) as resp:
+        raw = resp.read()
+    return _decode_bytes(raw)
 
 
 def write_articles(laws, out_dir: Path = DATA_DIR) -> int:
@@ -269,7 +280,7 @@ def main():
     found = {name for name, _ in laws}
     missing = whitelist - found
     if missing:
-        print(f"⚠ 白名單中未在 XML 找到：{', '.join(sorted(missing))}")
+        print(f"[警告] 白名單中未在 XML 找到：{', '.join(sorted(missing))}")
 
     n = write_articles(laws, out_dir=Path(args.out))
     print(f"完成：共產生 {n} 個條文檔案，輸出至 {args.out}")

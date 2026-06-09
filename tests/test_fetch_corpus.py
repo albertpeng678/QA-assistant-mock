@@ -12,6 +12,7 @@ from scripts.fetch_corpus import (
     sanitize_filename,
     parse_laws,
     Article,
+    _decode_bytes,
 )
 
 # 模仿全國法規資料庫 RAW_XML：根 <法規資料庫> 內多個 <法規>，
@@ -89,6 +90,26 @@ class TestSanitizeFilename:
         out = sanitize_filename('個資/保護:法<v1>?')
         for ch in '\\/:*?"<>|':
             assert ch not in out
+
+
+class TestDecodeBytes:
+    """_decode_bytes：本地檔與網路路徑共用的解碼邏輯（utf-8 → big5 fallback）。
+
+    全國法規資料庫 RAW XML 實務上常為 Big5，離線用 --xml 餵 Big5 檔不得炸 UnicodeDecodeError。
+    """
+
+    SAMPLE = "個人資料保護法 第12條 洩漏"
+
+    def test_big5_bytes_decoded(self):
+        raw = self.SAMPLE.encode("big5")
+        # 確認測資真的是 big5（utf-8 解會失敗），否則測試沒鑑別力
+        with pytest.raises(UnicodeDecodeError):
+            raw.decode("utf-8")
+        assert _decode_bytes(raw) == self.SAMPLE
+
+    def test_utf8_bytes_decoded(self):
+        raw = self.SAMPLE.encode("utf-8")
+        assert _decode_bytes(raw) == self.SAMPLE
 
 
 class TestParseLaws:
