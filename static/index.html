@@ -75,6 +75,8 @@
   .fb-btn:hover{ border-color:#7a2e2e55; color:var(--blood); }
   .fb-btn.active{ background:var(--blood); color:var(--paper); border-color:var(--blood); }
 
+  /* 深色頂列上的按鈕 hover：紙白半透明（嚴守三色，不引入純白） */
+  .bar-btn{ transition:background .15s; } .bar-btn:hover{ background:#f5f2ea26; }
   .icon-sm{ width:15px; height:15px; } .icon-xs{ width:13px; height:13px; }
   ::-webkit-scrollbar{ width:9px; } ::-webkit-scrollbar-thumb{ background:var(--ink-20); border-radius:5px; }
 </style>
@@ -83,14 +85,14 @@
 
   <!-- 頂列：左側 hamburger（與 offcanvas 同側）+ 品牌 -->
   <header class="flex items-center gap-3 px-4 py-3 text-[var(--paper)]" style="background:var(--ink)">
-    <button id="ham" aria-label="開啟引證依據" class="relative inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-white/15 transition">
+    <button id="ham" aria-label="開啟引證依據" class="bar-btn relative inline-flex items-center justify-center w-9 h-9 rounded-lg">
       <i data-lucide="menu" class="w-5 h-5"></i>
       <span id="ham-count" class="hidden absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-lg text-[10px] font-bold items-center justify-center" style="background:var(--blood)"></span>
     </button>
     <i data-lucide="scale" class="w-4 h-4 opacity-85"></i>
     <h1 class="font-display font-semibold text-[15px] tracking-tight">法遵研究助理</h1>
     <span class="flex-1"></span>
-    <button id="new-chat" aria-label="新對話" class="inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-white/15 transition opacity-80">
+    <button id="new-chat" aria-label="新對話" class="bar-btn inline-flex items-center justify-center w-9 h-9 rounded-lg opacity-80">
       <i data-lucide="square-pen" class="w-4 h-4"></i>
     </button>
   </header>
@@ -103,7 +105,7 @@
   <!-- 輸入區 + disclaimer -->
   <footer class="border-t px-4 py-3" style="border-color:var(--ink-12); background:var(--paper)">
     <form id="ask-form" class="max-w-3xl mx-auto">
-      <div class="flex items-center gap-2 bg-white rounded-xl px-3 py-2 border" style="border-color:var(--ink-20)">
+      <div class="flex items-center gap-2 rounded-xl px-3 py-2 border" style="background:var(--surface); border-color:var(--ink-20)">
         <input id="q" autocomplete="off" aria-label="輸入法遵問題" class="flex-1 bg-transparent outline-none font-body text-[15px] px-1 py-1"
                placeholder="輸入你的法遵問題…" />
         <button type="submit" id="send" aria-label="送出"
