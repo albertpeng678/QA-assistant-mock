@@ -1,0 +1,5 @@
+# 強制 nixpacks 以 Python 建置。
+# repo 根目錄有 package.json（供 Playwright E2E 測試，dev-only），
+# 會讓 nixpacks 誤判為 Node 專案而只跑 npm ci、不裝 Python 依賴，
+# 導致 uvicorn not found。明確指定 python provider 解決。
+providers = ["python"]
