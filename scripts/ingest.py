@@ -7,12 +7,7 @@ import sys
 from pathlib import Path
 from openai import OpenAI
 
-# 🎯 缺口 3（研究型，無測試）：chunking 策略
-# 法規 chunking 是長期被深入研究的領域（條文層級、跨條引用）。
-# 請用 context7 MCP 研究：(1) OpenAI file search 的 chunking 參數與範圍限制，
-# (2) 法規 / 長文 RAG 社群的主流 chunking 作法，再決定下面兩個值。
-# 約束：max 介於 100–4096；overlap 須 ≤ max/2。提示見 README「缺口地圖」。
-# context7 查 OpenAI file search static chunking 規格（openai-python，StaticFileChunkingStrategy）：
+# chunking 策略（依 context7 查得之 OpenAI file search static chunking 規格；openai-python，StaticFileChunkingStrategy）：
 #   max_chunk_size_tokens 合法區間 100–4096、預設 800；chunk_overlap_tokens 預設 400 且須 ≤ max/2。
 # 本語料已在上傳前逐條切成「一條一檔」，多數檔偏短（一條法規通常遠小於 800 tokens），
 # 故採中小 chunk + 小 overlap：多數短檔本來就會落在單一 chunk，small chunk 讓少數長條（含多項/多款）
