@@ -63,3 +63,18 @@ def test_parse_response_evidence_empty_when_no_results():
     result = parse_response(_fake_response())
     assert result["evidence"] == []
     assert result["response_id"] is None
+
+def test_answer_question_includes_search_results():
+    client = _FakeClient(_fake_response_with_results())
+    answer_question(client, "個資外洩?", vector_store_id="vs_1", model="gpt-4o-mini")
+    assert client.responses.calls[0]["include"] == ["file_search_call.results"]
+
+def test_answer_question_chains_previous_response_id():
+    client = _FakeClient(_fake_response_with_results())
+    answer_question(client, "追問", vector_store_id="vs_1", model="gpt-4o-mini", previous_response_id="resp_abc")
+    assert client.responses.calls[0]["previous_response_id"] == "resp_abc"
+
+def test_answer_question_omits_previous_response_id_when_none():
+    client = _FakeClient(_fake_response_with_results())
+    answer_question(client, "首問", vector_store_id="vs_1", model="gpt-4o-mini")
+    assert "previous_response_id" not in client.responses.calls[0]

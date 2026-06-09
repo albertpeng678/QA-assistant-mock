@@ -46,10 +46,19 @@ def parse_response(response):
     }
 
 
-def answer_question(client, question, *, vector_store_id, model):
-    """以 file_search tool 對 vector store 提問，回傳 answer + citations。
+def answer_question(client, question, *, vector_store_id, model, previous_response_id=None):
+    """以 file_search tool 對 vector store 提問，回傳 parse_response 的結果。
 
-    🎯 缺口 2（核心，有測試）：呼叫 OpenAI Responses API 的 file_search tool，
-    再用 parse_response 解析結果。
+    回傳 {"answer", "citations", "evidence", "response_id"}。傳入 previous_response_id
+    可串接多輪對話（Responses API 的對話狀態）。
     """
-    raise NotImplementedError("缺口 2：請實作 answer_question — 提示見 README")
+    kwargs = {
+        "model": model,
+        "input": question,
+        "tools": [{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+        "include": ["file_search_call.results"],
+    }
+    if previous_response_id:
+        kwargs["previous_response_id"] = previous_response_id
+    response = client.responses.create(**kwargs)
+    return parse_response(response)
