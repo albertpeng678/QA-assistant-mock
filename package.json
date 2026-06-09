@@ -1,0 +1,12 @@
+{
+  "name": "legal-rag-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright E2E tests for the legal RAG QA frontend (runs against scripts/mock_server.py, no external OpenAI/DB).",
+  "scripts": {
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

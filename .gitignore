@@ -9,3 +9,10 @@ __pycache__/
 
 .playwright-mcp/
 fe-*.png
+
+# node / Playwright E2E
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
