@@ -78,3 +78,25 @@ def test_answer_question_omits_previous_response_id_when_none():
     client = _FakeClient(_fake_response_with_results())
     answer_question(client, "首問", vector_store_id="vs_1", model="gpt-4o-mini")
     assert "previous_response_id" not in client.responses.calls[0]
+
+import json as _json
+from app.rag import suggest_followups
+
+class _FakeStructResponses:
+    def __init__(self, payload):
+        self._payload = payload
+        self.calls = []
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(output_text=_json.dumps(self._payload))
+
+class _FakeStructClient:
+    def __init__(self, payload):
+        self.responses = _FakeStructResponses(payload)
+
+def test_suggest_followups_returns_questions():
+    client = _FakeStructClient({"questions": ["通報期限？", "罰鍰範圍？", "民事責任？"]})
+    out = suggest_followups(client, "個資外洩?", "應通知當事人。", model="gpt-5.4-mini")
+    assert out["questions"] == ["通報期限？", "罰鍰範圍？", "民事責任？"]
+    call = client.responses.calls[0]
+    assert call["text"]["format"]["type"] == "json_schema"

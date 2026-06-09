@@ -7,6 +7,8 @@ tests/test_rag.py 內有現成的失敗測試，你的目標是讓它們全部�
     git show solution:app/rag.py
 """
 
+import json
+
 
 def parse_response(response):
     """把 Responses API 回應解析為 {"answer": str, "citations": [str], "evidence": [{"filename", "text", "score"}], "response_id": str|None}。
@@ -62,3 +64,26 @@ def answer_question(client, question, *, vector_store_id, model, previous_respon
         kwargs["previous_response_id"] = previous_response_id
     response = client.responses.create(**kwargs)
     return parse_response(response)
+
+
+_FOLLOWUP_SCHEMA = {
+    "type": "json_schema",
+    "name": "followups",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {"questions": {"type": "array", "items": {"type": "string"}}},
+        "required": ["questions"],
+        "additionalProperties": False,
+    },
+}
+
+
+def suggest_followups(client, question, answer, *, model):
+    """用 structured outputs 產生 3 題法遵追問建議。與主問答分離，不影響 citation annotations。"""
+    prompt = (
+        "你是法遵助理。根據以下問答，產生 3 個使用者可能想接著問的繁體中文追問問題，每題簡短。\n"
+        f"問題：{question}\n回答：{answer}"
+    )
+    response = client.responses.create(model=model, input=prompt, text={"format": _FOLLOWUP_SCHEMA})
+    return json.loads(response.output_text)
