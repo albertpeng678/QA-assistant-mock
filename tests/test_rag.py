@@ -100,3 +100,72 @@ def test_suggest_followups_returns_questions():
     assert out["questions"] == ["通報期限？", "罰鍰範圍？", "民事責任？"]
     call = client.responses.calls[0]
     assert call["text"]["format"]["type"] == "json_schema"
+
+
+# ---- (B) answer_question 套用 gpt-5.4-mini 推理模型參數 + markdown 指示 ----
+from app.rag import ANSWER_INSTRUCTIONS, _MODEL_PARAMS
+
+
+def test_answer_question_applies_reasoning_model_params():
+    client = _FakeClient(_fake_response_with_results())
+    answer_question(client, "加班費?", vector_store_id="vs_1", model="gpt-5.4-mini")
+    call = client.responses.calls[0]
+    assert call["reasoning"] == {"effort": "low"}
+    assert call["text"]["verbosity"] == "medium"
+    assert call["max_output_tokens"] == 2048
+    assert call["instructions"] == ANSWER_INSTRUCTIONS
+    # 推理模型不可帶 temperature/top_p
+    assert "temperature" not in call
+    assert "top_p" not in call
+
+
+def test_suggest_followups_text_format_unchanged():
+    # 確保 suggest_followups 的 text.format 沒被 _MODEL_PARAMS 污染
+    client = _FakeStructClient({"questions": ["a", "b", "c"]})
+    suggest_followups(client, "q", "a", model="gpt-5.4-mini")
+    call = client.responses.calls[0]
+    assert call["text"]["format"]["type"] == "json_schema"
+    assert "verbosity" not in call["text"]
+
+
+# ---- (C) parse_response 擷取 usage ----
+def _fake_response_with_usage():
+    content = SimpleNamespace(text="ok", annotations=[])
+    message = SimpleNamespace(type="message", content=[content])
+    usage = SimpleNamespace(input_tokens=10, output_tokens=20, total_tokens=30)
+    return SimpleNamespace(output=[message], id="resp_u", usage=usage)
+
+
+def test_parse_response_extracts_usage():
+    result = parse_response(_fake_response_with_usage())
+    assert result["usage"] == {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}
+
+
+def test_parse_response_usage_zero_when_missing():
+    result = parse_response(_fake_response())
+    assert result["usage"] == {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+
+# ---- (D) stream_answer SSE generator ----
+from app.rag import stream_answer
+
+
+def test_stream_answer_yields_deltas_then_final():
+    delta1 = SimpleNamespace(type="response.output_text.delta", delta="部分")
+    delta2 = SimpleNamespace(type="response.output_text.delta", delta="答案")
+    completed = SimpleNamespace(type="response.completed", response=_fake_response_with_results())
+    client = _FakeClient([delta1, delta2, completed])
+
+    events = list(stream_answer(client, "個資外洩?", vector_store_id="vs_1", model="gpt-5.4-mini"))
+
+    assert events[0] == {"type": "delta", "text": "部分"}
+    assert events[1] == {"type": "delta", "text": "答案"}
+    final = events[2]
+    assert final["type"] == "final"
+    assert final["citations"] == ["個資法-第12條.txt"]
+    assert final["evidence"][0]["score"] == 0.91
+    assert final["response_id"] == "resp_abc"
+    # 串流啟用且套用推理參數
+    call = client.responses.calls[0]
+    assert call["stream"] is True
+    assert call["reasoning"] == {"effort": "low"}

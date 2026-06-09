@@ -10,6 +10,20 @@ tests/test_rag.py 內有現成的失敗測試，你的目標是讓它們全部�
 import json
 
 
+ANSWER_INSTRUCTIONS = (
+    "你是台灣企業法遵研究助理。回答務必：以繁體中文；使用 Markdown 結構——"
+    "重點用條列（- ），有層次時用巢狀縮排，段落之間以空行分隔；先結論後依據；"
+    "引用條文時標明法規名稱與條號。本回答為研究輔助，非正式法律意見。"
+)
+
+# gpt-5.4-mini 為推理模型：用 reasoning/text.verbosity，不可傳 temperature/top_p。
+_MODEL_PARAMS = {
+    "reasoning": {"effort": "low"},
+    "text": {"verbosity": "medium"},
+    "max_output_tokens": 2048,
+}
+
+
 def parse_response(response):
     """把 Responses API 回應解析為 {"answer": str, "citations": [str], "evidence": [{"filename", "text", "score"}], "response_id": str|None}。
 
@@ -40,11 +54,18 @@ def parse_response(response):
                 "text": getattr(r, "text", None),
                 "score": getattr(r, "score", None),
             })
+    usage_obj = getattr(response, "usage", None)
+    usage = {
+        "input_tokens": getattr(usage_obj, "input_tokens", 0) or 0,
+        "output_tokens": getattr(usage_obj, "output_tokens", 0) or 0,
+        "total_tokens": getattr(usage_obj, "total_tokens", 0) or 0,
+    }
     return {
         "answer": "".join(answer_parts),
         "citations": citations,
         "evidence": evidence,
         "response_id": getattr(response, "id", None),
+        "usage": usage,
     }
 
 
@@ -54,16 +75,45 @@ def answer_question(client, question, *, vector_store_id, model, previous_respon
     回傳 {"answer", "citations", "evidence", "response_id"}。傳入 previous_response_id
     可串接多輪對話（Responses API 的對話狀態）。
     """
+    kwargs = _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
+    response = client.responses.create(**kwargs)
+    return parse_response(response)
+
+
+def _build_answer_kwargs(question, vector_store_id, model, previous_response_id):
+    """組出 file_search 問答呼叫的 kwargs（answer_question / stream_answer 共用）。"""
     kwargs = {
         "model": model,
         "input": question,
+        "instructions": ANSWER_INSTRUCTIONS,
         "tools": [{"type": "file_search", "vector_store_ids": [vector_store_id]}],
         "include": ["file_search_call.results"],
+        **_MODEL_PARAMS,
     }
     if previous_response_id:
         kwargs["previous_response_id"] = previous_response_id
-    response = client.responses.create(**kwargs)
-    return parse_response(response)
+    return kwargs
+
+
+def stream_answer(client, question, *, vector_store_id, model, previous_response_id=None):
+    """SSE 串流問答：逐事件 yield {"type":"delta","text":...}，最後 yield {"type":"final", **parse_response(final)}。
+
+    事件型別判斷採容錯策略，相容 OpenAI Responses 串流事件物件的差異。
+    """
+    kwargs = _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
+    kwargs["stream"] = True
+    final_response = None
+    for event in client.responses.create(**kwargs):
+        event_type = getattr(event, "type", None) or ""
+        if "response.completed" in event_type and getattr(event, "response", None) is not None:
+            final_response = event.response
+            continue
+        # 文字增量事件：type 含 output_text.delta，或事件帶 .delta 屬性
+        delta = getattr(event, "delta", None)
+        if ("output_text.delta" in event_type or delta is not None) and isinstance(delta, str):
+            yield {"type": "delta", "text": delta}
+    if final_response is not None:
+        yield {"type": "final", **parse_response(final_response)}
 
 
 _FOLLOWUP_SCHEMA = {
