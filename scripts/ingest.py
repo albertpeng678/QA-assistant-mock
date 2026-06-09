@@ -2,6 +2,7 @@
 用法: python scripts/ingest.py
 完成後會印出 VECTOR_STORE_ID，請填入 Railway variables。
 """
+import argparse
 import json
 import os
 import re
@@ -20,10 +21,36 @@ LAW_CATEGORY = {
     "公平交易法": "公平交易",
     "營業秘密法": "營業秘密",
     "消費者保護法": "消費者保護",
+    # 補語料衍生的相關母法（稽核 P1：消除 category=其他）
+    "商業登記法": "公司治理",
+    "多層次傳銷管理法": "公平交易",
 }
+
+# 純空殼條文標記（稽核 P0）：ingest 時略過，避免上傳零價值「（刪除）」檔。
+_EMPTY_MARKERS = {"（刪除）", "(刪除)", "（保留）", "(保留)", ""}
+
+
+def is_empty_article(content: str) -> bool:
+    """判斷是否為純「（刪除）/（保留）」空殼條文（精確比對，含字樣的完整條文不誤殺）。"""
+    return (content or "").strip() in _EMPTY_MARKERS
 
 # 解析檔名 {法規名稱}-第N條.txt（N 可含 "-"，例 1-1）。
 _FILENAME_RE = re.compile(r"^(?P<law>.+)-(?P<article>第[\d-]+條)$")
+
+# 非條文素材檔名：{簡稱}-{doc_type}-{標題}（函釋/FAQ/判決/裁罰）。
+_NONARTICLE_RE = re.compile(r"^(?P<prefix>.+?)-(?P<doc_type>函釋|FAQ|判決|裁罰)-(?P<title>.+)$")
+
+
+def _parse_first_line(first_line: str) -> dict:
+    """解析非條文檔首行的管線分隔 metadata（來源/效力/字號/發文日/對應條號/母法…）。"""
+    out = {}
+    if not first_line:
+        return out
+    for part in first_line.replace("：", ":").split("|"):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            out[k.strip()] = v.strip()
+    return out
 
 
 # 官方單一條文頁 URL 模板（全國法規資料庫）。
@@ -40,15 +67,46 @@ def article_to_flno(article: str) -> str:
     return article.replace("第", "").replace("條", "").strip()
 
 
-def derive_attributes(filename: str, law_index=None) -> dict:
-    """從 {法規名稱}-第N條.txt 解析 per-file metadata attributes（值皆為 str）。
+def derive_attributes(filename: str, law_index=None, first_line: str = None) -> dict:
+    """從檔名（與非條文素材的首行 metadata）解析 per-file attributes（值皆為 str，≤16 鍵）。
 
-    回傳 law / article / category / doc_type / source（<16，符合上限）。
-    若提供 law_index（{法規名稱: pcode}）且該 law 有非空 pcode，額外加 url
-    （指向官方單一條文頁）；否則不加 url，保持向後相容。
-    解析不到時退回較安全的預設值，避免上傳中斷。
+    條文/施行細則：{法規名稱}-第N條.txt → law/article/category/doc_type/source(+url)。
+    非條文（函釋/FAQ/判決/裁罰）：{簡稱}-{doc_type}-{標題}.txt，doc_type 由檔名定，
+    其餘（母法/字號/發文日/對應條號/來源）由 first_line 取，category 由母法對應。
+    若提供 law_index 且 pcode/條號齊備，加官方原文 url。解析不到退回安全預設。
     """
     stem = Path(filename).stem  # 去副檔名
+
+    # —— 非條文素材（函釋/FAQ/判決/裁罰）——
+    m_non = _NONARTICLE_RE.match(stem)
+    if m_non:
+        doc_type = m_non.group("doc_type")
+        meta = _parse_first_line(first_line)
+        law = meta.get("母法") or m_non.group("prefix")
+        article = meta.get("對應條號", "")
+        if article in ("", "未標明"):
+            article = ""
+        attrs = {
+            "law": law,
+            "article": article,
+            "category": LAW_CATEGORY.get(law, "其他"),
+            "doc_type": doc_type,
+            "source": meta.get("來源", "") or "全國法規資料庫",
+            "authority_level": meta.get("效力", doc_type),
+        }
+        if meta.get("字號"):
+            attrs["ref_no"] = meta["字號"]
+        eff = meta.get("發文日") or meta.get("發布日") or meta.get("裁判日")
+        if eff:
+            attrs["effective_date"] = eff
+        if law_index and article:
+            pcode = law_index.get(law, "")
+            flno = article_to_flno(article)
+            # 僅阿拉伯數字條號才組 url，避免中文數字條號（如「四十五」）產生指向錯誤的連結（稽核 P2）。
+            if pcode and flno and re.fullmatch(r"[\d-]+", flno):
+                attrs["url"] = _LAW_SINGLE_URL.format(pcode=pcode, flno=flno)
+        return attrs
+
     m = _FILENAME_RE.match(stem)
     if m:
         law = m.group("law")
@@ -56,11 +114,20 @@ def derive_attributes(filename: str, law_index=None) -> dict:
     else:
         law = stem
         article = ""
+    # 施行細則本身是含條文的法規（同切檔管線）；doc_type 標「施行細則」、
+    # category 沿用母法分類（母法名 = 去掉「施行細則」後綴）。
+    if law.endswith("施行細則"):
+        doc_type = "施行細則"
+        base_law = law[: -len("施行細則")]
+        category = LAW_CATEGORY.get(base_law, "其他")
+    else:
+        doc_type = "法條"
+        category = LAW_CATEGORY.get(law, "其他")
     attrs = {
         "law": law,
         "article": article,
-        "category": LAW_CATEGORY.get(law, "其他"),
-        "doc_type": "法條",
+        "category": category,
+        "doc_type": doc_type,
         "source": "全國法規資料庫",
     }
     if law_index:
@@ -81,6 +148,14 @@ CHUNK_OVERLAP_TOKENS = 128   # 小 overlap，滿足 ≤ max/2 (=256) 約束
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 def main():
+    parser = argparse.ArgumentParser(description="建立 / 擴充法規 file_search vector store")
+    parser.add_argument(
+        "--vector-store-id",
+        default=os.getenv("INGEST_VECTOR_STORE_ID"),
+        help="附加到既有 vector store（沿用同一 ID，不建新）；不指定則新建。",
+    )
+    args = parser.parse_args()
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         sys.exit("請先設定 OPENAI_API_KEY 環境變數")
@@ -100,8 +175,13 @@ def main():
         print("未找到 data/_law_index.json，將不附 url attribute（先跑 fetch_corpus.py 可產生）")
 
     client = OpenAI(api_key=api_key)
-    vector_store = client.vector_stores.create(name="法規語料")
-    print(f"已建立 vector store: {vector_store.id}")
+    append_mode = bool(args.vector_store_id)
+    if append_mode:
+        vector_store = client.vector_stores.retrieve(args.vector_store_id)
+        print(f"附加模式：沿用既有 vector store {vector_store.id}（法條已在內，只上傳新語料）")
+    else:
+        vector_store = client.vector_stores.create(name="法規語料")
+        print(f"已建立 vector store: {vector_store.id}")
 
     chunking_strategy = {
         "type": "static",
@@ -111,10 +191,23 @@ def main():
         },
     }
 
-    # 步驟一：逐檔上傳成 file_id，並附帶從檔名解析出的 per-file attributes。
+    # 步驟一：逐檔上傳成 file_id，並附帶從檔名 + 首行 metadata 解析出的 per-file attributes。
+    # 略過純「（刪除）/（保留）」空殼條文（稽核 P0）；首行供函釋/FAQ 解析母法/字號等。
     # 容錯：單檔上傳失敗印警告跳過，不中斷整批。檔案 handle 用 with 確保關閉。
     file_specs = []
+    skipped_empty = 0
+    skipped_existing = 0
     for p in files:
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if is_empty_article(text):
+            skipped_empty += 1
+            continue
+        first_line = text.splitlines()[0] if text.splitlines() else ""
+        attributes = derive_attributes(p.name, law_index=law_index, first_line=first_line)
+        # 附加模式：法條已在既有 store，只上傳新語料（施行細則/函釋/FAQ…），避免重複。
+        if append_mode and attributes["doc_type"] == "法條":
+            skipped_existing += 1
+            continue
         try:
             with open(p, "rb") as fh:
                 f = client.files.create(file=fh, purpose="assistants")
@@ -123,9 +216,13 @@ def main():
             continue
         file_specs.append({
             "file_id": f.id,
-            "attributes": derive_attributes(p.name, law_index=law_index),
+            "attributes": attributes,
             "chunking_strategy": chunking_strategy,
         })
+    if skipped_empty:
+        print(f"已略過 {skipped_empty} 個純（刪除/保留）空殼條文")
+    if append_mode and skipped_existing:
+        print(f"附加模式：已略過 {skipped_existing} 個法條（既有 store 已含）")
 
     if not file_specs:
         sys.exit("沒有任何檔案成功上傳，中止。")
