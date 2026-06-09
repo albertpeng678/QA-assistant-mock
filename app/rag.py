@@ -8,6 +8,20 @@ tests/test_rag.py 內有現成的失敗測試，你的目標是讓它們全部�
 """
 
 import json
+import re
+
+
+# gpt-5.4-mini 把 inline 引用標記塞進答案 text，需在輸出前剝除：
+#   - 私用區引用字元 U+E200–U+E20F（如 、）
+#   - turn-file token（如 turn0file1，亦可能為 fileciteturn0file1 文字形式）
+_PUA_CITATION_RE = re.compile(r"[-]")
+_TURN_FILE_RE = re.compile(r"(?:filecite)?turn\d+file\d+")
+
+
+def _strip_citation_markers(text):
+    text = _PUA_CITATION_RE.sub("", text)
+    text = _TURN_FILE_RE.sub("", text)
+    return text
 
 
 ANSWER_INSTRUCTIONS = (
@@ -54,6 +68,14 @@ def parse_response(response):
                 "text": getattr(r, "text", None),
                 "score": getattr(r, "score", None),
             })
+    # annotations 收集後若為空（gpt-5.4-mini 實測 annotations 常為空陣列），
+    # fallback 從 evidence 檔名衍生 citations（去重保序）。
+    if not citations:
+        for ev in evidence:
+            filename = ev.get("filename")
+            if filename and filename not in seen:
+                seen.add(filename)
+                citations.append(filename)
     usage_obj = getattr(response, "usage", None)
     usage = {
         "input_tokens": getattr(usage_obj, "input_tokens", 0) or 0,
@@ -61,7 +83,7 @@ def parse_response(response):
         "total_tokens": getattr(usage_obj, "total_tokens", 0) or 0,
     }
     return {
-        "answer": "".join(answer_parts),
+        "answer": _strip_citation_markers("".join(answer_parts)),
         "citations": citations,
         "evidence": evidence,
         "response_id": getattr(response, "id", None),

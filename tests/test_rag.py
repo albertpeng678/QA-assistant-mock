@@ -64,6 +64,30 @@ def test_parse_response_evidence_empty_when_no_results():
     assert result["evidence"] == []
     assert result["response_id"] is None
 
+
+def test_parse_response_strips_citation_markers():
+    # gpt-5.4-mini 把 inline 引用標記（私用區字元 U+E200–U+E20F + turnXfileY token）塞進 text，
+    # 這些不可漏進答案文字。
+    marked_text = "加班費依第24條計算。turn0file1"
+    content = SimpleNamespace(text=marked_text, annotations=[])
+    message = SimpleNamespace(type="message", content=[content])
+    result = parse_response(SimpleNamespace(output=[message]))
+    assert result["answer"] == "加班費依第24條計算。"
+    assert "" not in result["answer"]
+    assert "turn0file1" not in result["answer"]
+
+
+def test_parse_response_citations_fallback_to_evidence():
+    # annotations 為空（gpt-5.4-mini 的實測情形），citations 應 fallback 到 evidence 檔名（去重保序）。
+    content = SimpleNamespace(text="應通知當事人。", annotations=[])
+    message = SimpleNamespace(type="message", content=[content])
+    r1 = SimpleNamespace(filename="個資法-第12條.txt", text="…通知當事人。", score=0.91)
+    r2 = SimpleNamespace(filename="個資法-第6條.txt", text="…蒐集處理。", score=0.80)
+    r3 = SimpleNamespace(filename="個資法-第12條.txt", text="…重複檔。", score=0.70)
+    fs_call = SimpleNamespace(type="file_search_call", content=None, results=[r1, r2, r3])
+    result = parse_response(SimpleNamespace(output=[fs_call, message]))
+    assert result["citations"] == ["個資法-第12條.txt", "個資法-第6條.txt"]
+
 def test_answer_question_includes_search_results():
     client = _FakeClient(_fake_response_with_results())
     answer_question(client, "個資外洩?", vector_store_id="vs_1", model="gpt-4o-mini")
