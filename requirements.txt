@@ -5,3 +5,5 @@ pytest==8.3.4
 httpx==0.28.1
 sqlalchemy>=2.0
 psycopg[binary]>=3.1
+sse-starlette>=2.1
+sentry-sdk[fastapi]>=2.0
