@@ -14,11 +14,14 @@ import re
 # gpt-5.4-mini 把 inline 引用標記塞進答案 text，需在輸出前剝除：
 #   - 私用區引用字元 U+E200–U+E20F（如 、）
 #   - turn-file token（如 turn0file1，亦可能為 fileciteturn0file1 文字形式）
-_PUA_CITATION_RE = re.compile(r"[-]")
+_CITATION_RE = re.compile("\ue200.*?\ue201", re.DOTALL)
+_PUA_CITATION_RE = re.compile("[\ue200-\ue20f]")
 _TURN_FILE_RE = re.compile(r"(?:filecite)?turn\d+file\d+")
 
 
 def _strip_citation_markers(text):
+    # 官方格式 START(U+E200)…STOP(U+E201) 整段移除；殘缺標記做防禦性清理
+    text = _CITATION_RE.sub("", text)
     text = _PUA_CITATION_RE.sub("", text)
     text = _TURN_FILE_RE.sub("", text)
     return text

@@ -157,7 +157,9 @@ const thread = document.getElementById("thread");
 // 把 [^N] 腳註標記轉成可點上標引用（點擊開引證 offcanvas）
 const footnotes = (html) => html.replace(/\[\^(\d+)\]/g,
   '<sup><a href="#" class="cite-ref" data-ref="$1">$1</a></sup>');
-const md = (t) => footnotes(DOMPurify.sanitize(marked.parse(t || "", { breaks:true, gfm:true })));
+// 剝除 gpt-5.4-mini 的 inline 引用標記（U+E200–E20F 私用區字元 + turnXfileY token），避免漏進答案
+const stripCite = (t) => (t || "").replace(/\ue200[\s\S]*?\ue201/g, "");
+const md = (t) => footnotes(DOMPurify.sanitize(marked.parse(stripCite(t), { breaks:true, gfm:true })));
 const icons = () => lucide.createIcons();
 
 /* —— 渲染 starter chips（空狀態） —— */
