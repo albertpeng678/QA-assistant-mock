@@ -72,7 +72,7 @@ def parse_response(response):
 def answer_question(client, question, *, vector_store_id, model, previous_response_id=None):
     """以 file_search tool 對 vector store 提問，回傳 parse_response 的結果。
 
-    回傳 {"answer", "citations", "evidence", "response_id"}。傳入 previous_response_id
+    回傳 {"answer", "citations", "evidence", "response_id", "usage"}。傳入 previous_response_id
     可串接多輪對話（Responses API 的對話狀態）。
     """
     kwargs = _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
@@ -108,9 +108,10 @@ def stream_answer(client, question, *, vector_store_id, model, previous_response
         if "response.completed" in event_type and getattr(event, "response", None) is not None:
             final_response = event.response
             continue
-        # 文字增量事件：type 含 output_text.delta，或事件帶 .delta 屬性
+        # 只接受答案文字增量事件（output_text.delta）；推理模型的 reasoning/function_call
+        # delta 事件雖也帶 .delta 屬性，但屬思考鏈，不可洩漏進答案串流。
         delta = getattr(event, "delta", None)
-        if ("output_text.delta" in event_type or delta is not None) and isinstance(delta, str):
+        if event_type.endswith("output_text.delta") and isinstance(delta, str):
             yield {"type": "delta", "text": delta}
     if final_response is not None:
         yield {"type": "final", **parse_response(final_response)}

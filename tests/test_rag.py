@@ -169,3 +169,18 @@ def test_stream_answer_yields_deltas_then_final():
     call = client.responses.calls[0]
     assert call["stream"] is True
     assert call["reasoning"] == {"effort": "low"}
+
+
+def test_stream_answer_skips_reasoning_deltas():
+    # 推理模型 gpt-5.4-mini 會送出 reasoning delta 事件，這些思考鏈不可洩漏進答案串流。
+    reasoning = SimpleNamespace(type="response.reasoning_summary_text.delta", delta="思考中…")
+    answer = SimpleNamespace(type="response.output_text.delta", delta="正式答案")
+    completed = SimpleNamespace(type="response.completed", response=_fake_response_with_results())
+    client = _FakeClient([reasoning, answer, completed])
+
+    events = list(stream_answer(client, "個資外洩?", vector_store_id="vs_1", model="gpt-5.4-mini"))
+
+    deltas = [e for e in events if e["type"] == "delta"]
+    assert deltas == [{"type": "delta", "text": "正式答案"}]
+    assert "思考中…" not in [d["text"] for d in deltas]
+    assert events[-1]["type"] == "final"
