@@ -9,7 +9,7 @@ tests/test_rag.py 內有現成的失敗測試，你的目標是讓它們全部�
 
 
 def parse_response(response):
-    """把 Responses API 回應解析為 {"answer": str, "citations": [str]}。
+    """把 Responses API 回應解析為 {"answer": str, "citations": [str], "evidence": [{"filename", "text", "score"}], "response_id": str|None}。
 
     🎯 缺口 1（核心，有測試）：實作此函式，讓 test_rag.py 的 parse_response 測試通過。
     """
