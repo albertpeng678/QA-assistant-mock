@@ -15,7 +15,13 @@
 <style>
   :root{
     --ink:#1a1714; --paper:#f5f2ea; --blood:#7a2e2e;
-    --ink-08:#1a17141a; --ink-12:#1a17141f; --ink-20:#1a171433;
+    /* 墨黑 alpha 階梯（嚴守三色：一律 #1a1714 + 透明度） */
+    --ink-90:#1a1714e6; --ink-70:#1a1714b3; --ink-50:#1a171499;
+    --ink-35:#1a171459; --ink-20:#1a171433; --ink-12:#1a17141f; --ink-08:#1a17141a;
+    /* 卡片/列底色：嚴守三色，直接用紙白，靠 border + 淡墨陰影分層 */
+    --surface:var(--paper);
+    --shadow-sm:0 1px 2px #1a171414, 0 1px 3px #1a17140f;
+    --shadow-lg:6px 0 30px #1a171426;
   }
   *{ box-sizing:border-box; }
   html,body{ margin:0; height:100%; }
@@ -35,8 +41,9 @@
   .answer-prose h3{ font-size:1.05em; }
   .answer-prose strong{ font-weight:600; color:var(--ink); }
   .answer-prose code{ font-family:ui-monospace,monospace; font-size:.9em; background:var(--ink-08); padding:.1em .35em; border-radius:4px; }
-  .answer-prose blockquote{ border-left:3px solid var(--ink-20); padding-left:.9em; color:#5b554d; }
+  .answer-prose blockquote{ border-left:3px solid var(--ink-20); padding-left:.9em; color:var(--ink-70); }
   .answer-prose sup a{ color:var(--blood); font-weight:700; text-decoration:none; font-size:.7em; padding:0 1px; }
+  .cite-ref:focus-visible{ outline:2px solid var(--blood); outline-offset:2px; border-radius:3px; }
 
   /* —— 串流游標 —— */
   .stream-caret::after{ content:'▍'; color:var(--blood); animation:blink 1s steps(2) infinite; margin-left:1px; }
@@ -45,25 +52,26 @@
   /* —— offcanvas —— */
   #scrim{ position:fixed; inset:0; background:#1a171466; opacity:0; pointer-events:none; transition:opacity .25s; z-index:40; }
   #scrim.open{ opacity:1; pointer-events:auto; }
-  #offcanvas{ position:fixed; top:0; left:0; bottom:0; width:340px; max-width:86vw; background:#fbfaf6;
-              border-right:1px solid var(--ink-12); box-shadow:6px 0 30px #00000026;
+  #offcanvas{ position:fixed; top:0; left:0; bottom:0; width:340px; max-width:86vw; background:var(--surface);
+              border-right:1px solid var(--ink-12); box-shadow:var(--shadow-lg);
               transform:translateX(-100%); transition:transform .28s cubic-bezier(.4,0,.2,1); z-index:50;
               display:flex; flex-direction:column; }
   #offcanvas.open{ transform:translateX(0); }
-  .evi-card{ background:#fff; border:1px solid var(--ink-12); border-radius:9px; padding:13px; }
+  .evi-card{ background:var(--surface); border:1px solid var(--ink-12); border-radius:9px; padding:13px; box-shadow:var(--shadow-sm); }
   .evi-card.active{ border-color:#7a2e2e66; box-shadow:0 0 0 2px #7a2e2e1a; }
 
-  .chip{ display:inline-flex; align-items:center; gap:6px; background:#fff; border:1px solid #7a2e2e44;
+  .chip{ display:inline-flex; align-items:center; gap:6px; background:var(--surface); border:1px solid #7a2e2e44;
          color:var(--blood); border-radius:16px; padding:6px 13px; font-size:13px; cursor:pointer;
-         transition:background .15s,transform .1s; font-family:'Public Sans'; }
+         transition:background .15s,transform .1s; font-family:'Public Sans'; box-shadow:var(--shadow-sm); }
   .chip:hover{ background:#7a2e2e0d; } .chip:active{ transform:scale(.97); }
 
-  .src-row{ display:flex; align-items:center; gap:9px; background:#fff; border:1px solid var(--ink-12);
-            border-radius:8px; padding:8px 12px; cursor:pointer; transition:border-color .15s; }
+  .src-row{ display:flex; align-items:center; gap:9px; background:var(--surface); border:1px solid var(--ink-12);
+            border-radius:8px; padding:8px 12px; cursor:pointer; transition:border-color .15s; box-shadow:var(--shadow-sm); }
   .src-row:hover{ border-color:#7a2e2e55; }
+  .src-row:focus-visible{ outline:2px solid var(--blood); outline-offset:2px; }
 
   .fb-btn{ display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px;
-           border-radius:7px; border:1px solid var(--ink-12); background:#fff; cursor:pointer; color:#8a8278; transition:all .15s; }
+           border-radius:7px; border:1px solid var(--ink-12); background:var(--surface); cursor:pointer; color:var(--ink-50); transition:all .15s; }
   .fb-btn:hover{ border-color:#7a2e2e55; color:var(--blood); }
   .fb-btn.active{ background:var(--blood); color:var(--paper); border-color:var(--blood); }
 
@@ -96,7 +104,7 @@
   <footer class="border-t px-4 py-3" style="border-color:var(--ink-12); background:var(--paper)">
     <form id="ask-form" class="max-w-3xl mx-auto">
       <div class="flex items-center gap-2 bg-white rounded-xl px-3 py-2 border" style="border-color:var(--ink-20)">
-        <input id="q" autocomplete="off" class="flex-1 bg-transparent outline-none font-body text-[15px] px-1 py-1"
+        <input id="q" autocomplete="off" aria-label="輸入法遵問題" class="flex-1 bg-transparent outline-none font-body text-[15px] px-1 py-1"
                placeholder="輸入你的法遵問題…" />
         <button type="submit" id="send" aria-label="送出"
                 class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-[var(--paper)] transition disabled:opacity-40" style="background:var(--ink)">
@@ -112,11 +120,11 @@
 
   <!-- 左側 offcanvas：引證依據 -->
   <div id="scrim"></div>
-  <aside id="offcanvas" aria-label="引證依據">
+  <aside id="offcanvas" role="dialog" aria-modal="true" aria-label="引證依據">
     <div class="flex items-center gap-2 px-4 py-4 border-b" style="border-color:var(--ink-12)">
       <i data-lucide="file-search" class="icon-sm" style="color:var(--blood)"></i>
       <span class="font-display font-semibold text-[14px] flex-1">引證依據</span>
-      <button id="oc-close" aria-label="關閉" class="text-[#8a8278] hover:text-[var(--blood)]"><i data-lucide="x" class="icon-sm"></i></button>
+      <button id="oc-close" aria-label="關閉" class="text-[var(--ink-50)] hover:text-[var(--blood)]"><i data-lucide="x" class="icon-sm"></i></button>
     </div>
     <div id="oc-body" class="flex-1 overflow-y-auto px-4 py-4 space-y-3"></div>
   </aside>
@@ -141,7 +149,7 @@ function renderStarters(){
   box.className = "text-center py-10";
   box.innerHTML = `
     <div class="font-display text-[22px] font-semibold mb-1">企業法遵研究助理</div>
-    <p class="font-body text-[15px] text-[#5b554d] mb-6">以法規語料問答，附條文引用與可審查的引證依據</p>
+    <p class="font-body text-[15px] text-[var(--ink-70)] mb-6">以法規語料問答，附條文引用與可審查的引證依據</p>
     <div class="flex flex-wrap justify-center gap-2 max-w-xl mx-auto">
       ${STARTERS.map(s=>`<button class="chip starter" data-q="${s.replace(/"/g,'&quot;')}"><i data-lucide="sparkles" class="icon-xs"></i>${s}</button>`).join("")}
     </div>`;
@@ -167,7 +175,7 @@ function addAnswer(){
     <div data-sources class="space-y-2 hidden"></div>
     <div data-chips class="flex flex-wrap gap-2 hidden"></div>
     <div data-fb class="flex items-center gap-2 hidden">
-      <span class="text-[11px] text-[#8a8278]">這個回答有幫助嗎？</span>
+      <span class="text-[11px] text-[var(--ink-50)]">這個回答有幫助嗎？</span>
       <button class="fb-btn" data-rate="up" aria-label="有幫助"><i data-lucide="thumbs-up" class="icon-xs"></i></button>
       <button class="fb-btn" data-rate="down" aria-label="沒幫助"><i data-lucide="thumbs-down" class="icon-xs"></i></button>
     </div>`;
@@ -247,16 +255,19 @@ function finalizeAnswer(ui, question, answerText, evt){
   if(cites.length){
     ui.sourcesEl.classList.remove("hidden");
     ui.sourcesEl.innerHTML =
-      `<div class="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-[#8a8278] font-semibold mb-1">
+      `<div class="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-[var(--ink-50)] font-semibold mb-1">
          <i data-lucide="library" class="icon-xs"></i> 來源 ${cites.length} 則 · 點擊展開引證</div>` +
       cites.map((c,i)=>`
-        <div class="src-row" data-filename="${escapeHtml(c)}">
+        <div class="src-row" role="button" tabindex="0" aria-label="展開引證：${escapeHtml(c)}" data-filename="${escapeHtml(c)}">
           <span class="font-bold text-[var(--blood)] text-[12px]">${i+1}</span>
           <span class="font-body text-[13px] flex-1">${escapeHtml(c)}</span>
-          <i data-lucide="panel-left-open" class="icon-xs text-[#c2bdb2]"></i>
+          <i data-lucide="panel-left-open" class="icon-xs text-[var(--ink-35)]"></i>
         </div>`).join("");
-    ui.sourcesEl.querySelectorAll(".src-row").forEach(r=>
-      r.addEventListener("click", ()=> openOffcanvas(r.dataset.filename)));
+    ui.sourcesEl.querySelectorAll(".src-row").forEach(r=>{
+      const open = ()=> openOffcanvas(r.dataset.filename);
+      r.addEventListener("click", open);
+      r.addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } });
+    });
     updateHamCount(state.lastEvidence.length || cites.length);
   }
 
@@ -282,7 +293,7 @@ async function loadFollowups(chipsEl, question, answer){
     if(!questions || !questions.length) return;
     chipsEl.classList.remove("hidden");
     chipsEl.innerHTML =
-      `<span class="w-full flex items-center gap-1.5 text-[11px] text-[#8a8278] font-semibold">
+      `<span class="w-full flex items-center gap-1.5 text-[11px] text-[var(--ink-50)] font-semibold">
          <i data-lucide="sparkles" class="icon-xs"></i> 你可能想追問</span>` +
       questions.map(q=>`<button class="chip followup" data-q="${escapeHtml(q)}"><i data-lucide="corner-down-right" class="icon-xs"></i>${escapeHtml(q)}</button>`).join("");
     chipsEl.querySelectorAll(".followup").forEach(b=> b.addEventListener("click", ()=> submit(b.dataset.q)));
@@ -306,7 +317,7 @@ const ocBody = document.getElementById("oc-body");
 
 function renderEvidence(activeFilename){
   if(!state.lastEvidence.length){
-    ocBody.innerHTML = `<p class="font-body text-[14px] text-[#8a8278] text-center py-8">尚無引證依據</p>`;
+    ocBody.innerHTML = `<p class="font-body text-[14px] text-[var(--ink-50)] text-center py-8">尚無引證依據</p>`;
     return;
   }
   ocBody.innerHTML = state.lastEvidence.map((e,i)=>{
@@ -317,12 +328,12 @@ function renderEvidence(activeFilename){
         <div class="flex items-center gap-1.5 text-[12px] font-semibold">
           <i data-lucide="file-text" class="icon-xs"></i>
           <span class="text-[var(--blood)] flex-1 truncate">${escapeHtml(e.filename||"")}</span>
-          <span class="text-[10px] text-[#9a948a] font-normal">${score}</span>
+          <span class="text-[10px] text-[var(--ink-50)] font-normal">${score}</span>
         </div>
-        <div class="font-body text-[13px] leading-relaxed text-[#46413a] mt-2">${escapeHtml(e.text||"")}</div>
+        <div class="font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2">${escapeHtml(e.text||"")}</div>
         <button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
           <i data-lucide="external-link" class="icon-xs"></i> 開啟原文全文</button>
-        <div class="full-text hidden font-body text-[13px] leading-relaxed text-[#46413a] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>
+        <div class="full-text hidden font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>
       </div>`;
   }).join("");
   ocBody.querySelectorAll(".open-full").forEach(b=>
@@ -341,10 +352,14 @@ async function openFullText(btn){
   box.textContent = "載入中…";
   try{
     const r = await fetch("/api/source/"+encodeURIComponent(btn.dataset.filename));
-    if(!r.ok) throw 0;
+    if(!r.ok){
+      // production data/ 為空 → 404：友善降級，保留上方 evidence snippet
+      box.textContent = "原文尚未建立索引，請參考上方摘要。";
+      return;
+    }
     const { text } = await r.json();
-    box.textContent = text || "（無內容）";
-  }catch{ box.textContent = "無法載入原文。"; }
+    box.textContent = text || "原文尚未建立索引，請參考上方摘要。";
+  }catch{ box.textContent = "原文尚未建立索引，請參考上方摘要。"; }
 }
 
 function openOffcanvas(activeFilename){ renderEvidence(activeFilename); scrim.classList.add("open"); offcanvas.classList.add("open"); }
