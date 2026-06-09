@@ -437,7 +437,13 @@ git commit -m "feat: chunking 參數（缺口3，context7 研究後定值）"
 
 - [ ] **Step 1: 重寫 index.html（完整實作）**
 
-依設計：墨黑 `#1a1714`·紙白 `#f5f2ea`·酒紅 `#7a2e2e`；Fraunces+Spectral+Public Sans（Google Fonts CDN）；Lucide（CDN，禁 emoji）；Tailwind CDN。元件：訊息氣泡（多輪，前端保存上一輪 `response_id` 於下一次 `/api/ask` 帶 `previous_response_id`）、答案數字標記 ¹²³、下方去重彙整來源列、左上 hamburger（紅點數）開左側 offcanvas（330px / 手機 84% + 遮罩）、evidence card「開啟原文全文」呼叫 `/api/source/{filename}` 抽屜內展開、suggestion chips（呼叫 `/api/suggest`；空狀態 starter chips）、loading 狀態、錯誤狀態、持久 disclaimer、ESC/遮罩關閉、RWD。
+依設計：墨黑 `#1a1714`·紙白 `#f5f2ea`·酒紅 `#7a2e2e`；Fraunces+Spectral+Public Sans（Google Fonts CDN）；Lucide（CDN，禁 emoji）；Tailwind CDN。元件：訊息氣泡（多輪，前端保存上一輪 `response_id` 於下一次帶 `previous_response_id`）、答案數字標記 ¹²³、下方去重彙整來源列、左上 hamburger（紅點數）開左側 offcanvas（330px / 手機 84% + 遮罩）、evidence card「開啟原文全文」呼叫 `/api/source/{filename}` 抽屜內展開、suggestion chips（呼叫 `/api/suggest`；空狀態 starter chips）、loading 狀態、錯誤狀態、持久 disclaimer、ESC/遮罩關閉、RWD。
+
+**SSE 串流 + markdown 渲染（新需求）**：
+- 用 `fetch` POST `/api/ask/stream` + `ReadableStream` 讀 SSE（EventSource 僅 GET，故用 fetch streaming）。逐 `delta` 累加文字、**增量渲染 markdown**；收到 `final` 事件後渲染來源列/evidence/`query_log_id`。
+- Markdown 渲染用 `marked`（CDN）解析 + `DOMPurify`（CDN）淨化後插入，避免 XSS。
+- 排版（閱讀順暢）：答案區套 prose 風格——`line-height: 1.75`、段落 `margin` 留白、`ul/ol` 巢狀縮排（`padding-left`）、清單項 `margin` 間距，呼應墨黑/紙白/酒紅。
+- 回饋 UI：每則答案下方加 Lucide `thumbs-up`/`thumbs-down`（禁 emoji），點擊 POST `/api/feedback` 帶該則 `query_log_id`。
 
 > 落地時參照 `.superpowers/brainstorm/.../mockup-A-offcanvas-v2.html` 的版面與樣式作為基準。
 
@@ -665,6 +671,51 @@ def test_feedback_accepts_rating(monkeypatch):
 - [ ] **Step 3: 實作** `/api/feedback`（`FeedbackRequest{query_log_id:int, rating:Literal["up","down"]}` → `save_feedback` 寫 Feedback；DB 無則回 200 但記 warning）。`/api/ask` 回應需含 `query_log_id`（log 寫入後回傳 id；無 DB 時為 None）供前端回饋用。
 - [ ] **Step 4: 跑確認綠**
 - [ ] **Step 5: Commit** `feat: /api/feedback 使用者回饋端點`
+
+---
+
+## Task 14: SSE 串流 + markdown 格式 + gpt-5.4-mini 參數
+
+> gpt-5.4-mini 為 GPT-5 推理模型：用 `reasoning={"effort":"low"}`、`text={"verbosity":"medium"}`、**不傳 temperature/top_p**、`max_output_tokens=2048`。輸出指示模型用 markdown list/巢狀縮排/段落。
+
+**Files:**
+- Modify: `app/rag.py`（新增 `stream_answer` generator + 共用 `ANSWER_INSTRUCTIONS`/`_MODEL_PARAMS`；retrofit `answer_question` 套用相同 params）
+- Modify: `app/main.py`（新增 SSE 端點 `/api/ask/stream`）
+- Modify: `requirements.txt`（加 `sse-starlette`）
+- Test: `tests/test_rag.py`、`tests/test_api.py`
+
+- [ ] **Step 1: rag.py 加共用參數與指示（先寫測試）**
+
+```python
+ANSWER_INSTRUCTIONS = (
+    "你是台灣企業法遵研究助理。回答務必：以繁體中文；使用 Markdown 結構——"
+    "重點用條列（- ），有層次時用巢狀縮排，段落之間空行分隔；先結論後依據；"
+    "引用條文時標明法規名稱與條號。本回答為研究輔助，非正式法律意見。"
+)
+_MODEL_PARAMS = {
+    "reasoning": {"effort": "low"},
+    "text": {"verbosity": "medium"},
+    "max_output_tokens": 2048,
+}
+```
+測試（tests/test_rag.py）：斷言 `answer_question` 呼叫 create 時帶 `reasoning`、`text.verbosity`、`instructions`、且**未帶 temperature/top_p**。
+
+- [ ] **Step 2: 跑紅** — `python -m pytest tests/test_rag.py -v -k "params or instructions"`
+
+- [ ] **Step 3: retrofit answer_question + 新增 stream_answer**
+  - `answer_question` 的 kwargs 併入 `**_MODEL_PARAMS` 與 `instructions=ANSWER_INSTRUCTIONS`（既有 model/input/tools/include 斷言不受影響）。
+  - 新增 `stream_answer(client, question, *, vector_store_id, model, previous_response_id=None)`：與 answer_question 同 kwargs 但 `stream=True`，逐事件 yield `{"type":"delta","text":...}`；串流結束後從最終 response 物件用 `parse_response` 取 citations/evidence/response_id/usage，yield `{"type":"final", ...}`。用 fake streaming client（yield 一串假 event）寫離線測試。
+
+- [ ] **Step 4: main.py SSE 端點**
+  - `/api/ask/stream`（POST，body 同 AskRequest）回 `sse_starlette.EventSourceResponse`：逐筆把 delta 以 `data: {json}` 推送；最後送 `final`（含 citations/evidence/response_id/query_log_id）與 `done`。串流完成後**非阻斷**寫 query_log（latency 從開始到完成）。
+  - 保留非串流 `/api/ask` 作為 fallback 與測試路徑。
+
+- [ ] **Step 5: 跑綠 + Commit**
+
+```bash
+git add app/rag.py app/main.py requirements.txt tests/test_rag.py tests/test_api.py
+git commit -m "feat: SSE 串流問答 + markdown 指示 + gpt-5.4-mini 參數（reasoning/verbosity）"
+```
 
 ---
 
