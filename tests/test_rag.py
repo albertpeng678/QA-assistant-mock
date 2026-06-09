@@ -43,3 +43,23 @@ def test_answer_question_calls_file_search_with_vector_store():
     assert call["model"] == "gpt-4o-mini"
     assert call["input"] == "加班費怎麼算?"
     assert call["tools"] == [{"type": "file_search", "vector_store_ids": ["vs_123"]}]
+
+def _fake_response_with_results():
+    annotation = SimpleNamespace(filename="個資法-第12條.txt")
+    content = SimpleNamespace(text="應通知當事人。", annotations=[annotation])
+    message = SimpleNamespace(type="message", content=[content])
+    result = SimpleNamespace(filename="個資法-第12條.txt", text="…應查明後以適當方式通知當事人。", score=0.91)
+    fs_call = SimpleNamespace(type="file_search_call", content=None, results=[result])
+    return SimpleNamespace(output=[fs_call, message], id="resp_abc")
+
+def test_parse_response_extracts_evidence_and_response_id():
+    result = parse_response(_fake_response_with_results())
+    assert result["response_id"] == "resp_abc"
+    assert result["evidence"] == [
+        {"filename": "個資法-第12條.txt", "text": "…應查明後以適當方式通知當事人。", "score": 0.91}
+    ]
+
+def test_parse_response_evidence_empty_when_no_results():
+    result = parse_response(_fake_response())
+    assert result["evidence"] == []
+    assert result["response_id"] is None

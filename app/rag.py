@@ -13,7 +13,37 @@ def parse_response(response):
 
     🎯 缺口 1（核心，有測試）：實作此函式，讓 test_rag.py 的 parse_response 測試通過。
     """
-    raise NotImplementedError("缺口 1：請實作 parse_response — 提示見 README")
+    answer_parts = []
+    citations = []
+    seen = set()
+    for item in response.output:
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in item.content or []:
+            text = getattr(content, "text", None)
+            if text:
+                answer_parts.append(text)
+            for annotation in getattr(content, "annotations", None) or []:
+                filename = getattr(annotation, "filename", None)
+                if filename and filename not in seen:
+                    seen.add(filename)
+                    citations.append(filename)
+    evidence = []
+    for item in response.output:
+        if getattr(item, "type", None) != "file_search_call":
+            continue
+        for r in getattr(item, "results", None) or []:
+            evidence.append({
+                "filename": getattr(r, "filename", None),
+                "text": getattr(r, "text", None),
+                "score": getattr(r, "score", None),
+            })
+    return {
+        "answer": "".join(answer_parts),
+        "citations": citations,
+        "evidence": evidence,
+        "response_id": getattr(response, "id", None),
+    }
 
 
 def answer_question(client, question, *, vector_store_id, model):
