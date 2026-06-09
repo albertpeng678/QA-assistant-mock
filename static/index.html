@@ -1,37 +1,380 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>法規 RAG 問答</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>法規 RAG 問答 — 企業法遵研究助理</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Spectral:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<!-- markdown 渲染：marked 解析 + DOMPurify 淨化（防 XSS） -->
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
+<style>
+  :root{
+    --ink:#1a1714; --paper:#f5f2ea; --blood:#7a2e2e;
+    --ink-08:#1a17141a; --ink-12:#1a17141f; --ink-20:#1a171433;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; height:100%; }
+  body{ background:var(--paper); color:var(--ink); font-family:'Public Sans',system-ui,sans-serif; }
+  .font-display{ font-family:'Fraunces',serif; }
+  .font-body{ font-family:'Spectral',serif; }
+
+  /* —— 答案 markdown 排版：行距、段落留白、巢狀縮排 —— */
+  .answer-prose{ font-family:'Spectral',serif; font-size:16px; line-height:1.85; color:var(--ink); }
+  .answer-prose > *+*{ margin-top:.85em; }
+  .answer-prose p{ margin:0; }
+  .answer-prose ul,.answer-prose ol{ margin:.4em 0; padding-left:1.5em; }
+  .answer-prose ul{ list-style:disc; } .answer-prose ol{ list-style:decimal; }
+  .answer-prose li{ margin:.3em 0; padding-left:.15em; }
+  .answer-prose li > ul,.answer-prose li > ol{ margin:.3em 0; }
+  .answer-prose h1,.answer-prose h2,.answer-prose h3{ font-family:'Fraunces',serif; font-weight:600; line-height:1.35; margin:.6em 0 .2em; }
+  .answer-prose h3{ font-size:1.05em; }
+  .answer-prose strong{ font-weight:600; color:var(--ink); }
+  .answer-prose code{ font-family:ui-monospace,monospace; font-size:.9em; background:var(--ink-08); padding:.1em .35em; border-radius:4px; }
+  .answer-prose blockquote{ border-left:3px solid var(--ink-20); padding-left:.9em; color:#5b554d; }
+  .answer-prose sup a{ color:var(--blood); font-weight:700; text-decoration:none; font-size:.7em; padding:0 1px; }
+
+  /* —— 串流游標 —— */
+  .stream-caret::after{ content:'▍'; color:var(--blood); animation:blink 1s steps(2) infinite; margin-left:1px; }
+  @keyframes blink{ 0%,50%{opacity:1} 50.01%,100%{opacity:0} }
+
+  /* —— offcanvas —— */
+  #scrim{ position:fixed; inset:0; background:#1a171466; opacity:0; pointer-events:none; transition:opacity .25s; z-index:40; }
+  #scrim.open{ opacity:1; pointer-events:auto; }
+  #offcanvas{ position:fixed; top:0; left:0; bottom:0; width:340px; max-width:86vw; background:#fbfaf6;
+              border-right:1px solid var(--ink-12); box-shadow:6px 0 30px #00000026;
+              transform:translateX(-100%); transition:transform .28s cubic-bezier(.4,0,.2,1); z-index:50;
+              display:flex; flex-direction:column; }
+  #offcanvas.open{ transform:translateX(0); }
+  .evi-card{ background:#fff; border:1px solid var(--ink-12); border-radius:9px; padding:13px; }
+  .evi-card.active{ border-color:#7a2e2e66; box-shadow:0 0 0 2px #7a2e2e1a; }
+
+  .chip{ display:inline-flex; align-items:center; gap:6px; background:#fff; border:1px solid #7a2e2e44;
+         color:var(--blood); border-radius:16px; padding:6px 13px; font-size:13px; cursor:pointer;
+         transition:background .15s,transform .1s; font-family:'Public Sans'; }
+  .chip:hover{ background:#7a2e2e0d; } .chip:active{ transform:scale(.97); }
+
+  .src-row{ display:flex; align-items:center; gap:9px; background:#fff; border:1px solid var(--ink-12);
+            border-radius:8px; padding:8px 12px; cursor:pointer; transition:border-color .15s; }
+  .src-row:hover{ border-color:#7a2e2e55; }
+
+  .fb-btn{ display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px;
+           border-radius:7px; border:1px solid var(--ink-12); background:#fff; cursor:pointer; color:#8a8278; transition:all .15s; }
+  .fb-btn:hover{ border-color:#7a2e2e55; color:var(--blood); }
+  .fb-btn.active{ background:var(--blood); color:var(--paper); border-color:var(--blood); }
+
+  .icon-sm{ width:15px; height:15px; } .icon-xs{ width:13px; height:13px; }
+  ::-webkit-scrollbar{ width:9px; } ::-webkit-scrollbar-thumb{ background:var(--ink-20); border-radius:5px; }
+</style>
 </head>
-<body class="bg-gray-50">
-  <main class="max-w-2xl mx-auto p-6">
-    <h1 class="text-2xl font-bold mb-4">法規 RAG 問答</h1>
-    <div id="log" class="space-y-3 mb-4"></div>
-    <form id="f" class="flex gap-2">
-      <input id="q" class="flex-1 border rounded px-3 py-2" placeholder="輸入你的法規問題…" />
-      <button class="bg-blue-600 text-white px-4 py-2 rounded">送出</button>
-    </form>
+<body class="flex flex-col h-full">
+
+  <!-- 頂列：左側 hamburger（與 offcanvas 同側）+ 品牌 -->
+  <header class="flex items-center gap-3 px-4 py-3 text-[var(--paper)]" style="background:var(--ink)">
+    <button id="ham" aria-label="開啟引證依據" class="relative inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-white/15 transition">
+      <i data-lucide="menu" class="w-5 h-5"></i>
+      <span id="ham-count" class="hidden absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-lg text-[10px] font-bold items-center justify-center" style="background:var(--blood)"></span>
+    </button>
+    <i data-lucide="scale" class="w-4 h-4 opacity-85"></i>
+    <h1 class="font-display font-semibold text-[15px] tracking-tight">法遵研究助理</h1>
+    <span class="flex-1"></span>
+    <button id="new-chat" aria-label="新對話" class="inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-white/15 transition opacity-80">
+      <i data-lucide="square-pen" class="w-4 h-4"></i>
+    </button>
+  </header>
+
+  <!-- 對話區 -->
+  <main class="flex-1 overflow-y-auto">
+    <div id="thread" class="max-w-3xl mx-auto px-4 py-6 space-y-5"></div>
   </main>
-  <script>
-    const log = document.getElementById("log");
-    document.getElementById("f").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const q = document.getElementById("q").value.trim();
-      if (!q) return;
-      log.innerHTML += `<div class="font-medium">Q: ${q}</div>`;
-      const r = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
-      });
-      const d = await r.json();
-      const cites = (d.citations || []).join("、");
-      log.innerHTML += `<div class="bg-white border rounded p-3">${d.answer}${cites ? `<div class="text-xs text-gray-500 mt-2">來源：${cites}</div>` : ""}</div>`;
-      document.getElementById("q").value = "";
+
+  <!-- 輸入區 + disclaimer -->
+  <footer class="border-t px-4 py-3" style="border-color:var(--ink-12); background:var(--paper)">
+    <form id="ask-form" class="max-w-3xl mx-auto">
+      <div class="flex items-center gap-2 bg-white rounded-xl px-3 py-2 border" style="border-color:var(--ink-20)">
+        <input id="q" autocomplete="off" class="flex-1 bg-transparent outline-none font-body text-[15px] px-1 py-1"
+               placeholder="輸入你的法遵問題…" />
+        <button type="submit" id="send" aria-label="送出"
+                class="inline-flex items-center justify-center w-8 h-8 rounded-lg text-[var(--paper)] transition disabled:opacity-40" style="background:var(--ink)">
+          <i data-lucide="arrow-up" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <p class="flex items-center justify-center gap-1.5 mt-2 text-[11px]" style="color:var(--blood)">
+        <i data-lucide="alert-triangle" class="icon-xs"></i>
+        本工具協助研究，非法律意見，請核對條文原文
+      </p>
+    </form>
+  </footer>
+
+  <!-- 左側 offcanvas：引證依據 -->
+  <div id="scrim"></div>
+  <aside id="offcanvas" aria-label="引證依據">
+    <div class="flex items-center gap-2 px-4 py-4 border-b" style="border-color:var(--ink-12)">
+      <i data-lucide="file-search" class="icon-sm" style="color:var(--blood)"></i>
+      <span class="font-display font-semibold text-[14px] flex-1">引證依據</span>
+      <button id="oc-close" aria-label="關閉" class="text-[#8a8278] hover:text-[var(--blood)]"><i data-lucide="x" class="icon-sm"></i></button>
+    </div>
+    <div id="oc-body" class="flex-1 overflow-y-auto px-4 py-4 space-y-3"></div>
+  </aside>
+
+<script>
+const STARTERS = [
+  "個資外洩要通報誰？期限多久？",
+  "洗錢防制的客戶盡職調查（KYC）要做到什麼程度？",
+  "公司內線交易的重大消息何時才可買賣股票？",
+];
+const state = { previousResponseId: null, lastEvidence: [], answering: false };
+const thread = document.getElementById("thread");
+// 把 [^N] 腳註標記轉成可點上標引用（點擊開引證 offcanvas）
+const footnotes = (html) => html.replace(/\[\^(\d+)\]/g,
+  '<sup><a href="#" class="cite-ref" data-ref="$1">$1</a></sup>');
+const md = (t) => footnotes(DOMPurify.sanitize(marked.parse(t || "", { breaks:true, gfm:true })));
+const icons = () => lucide.createIcons();
+
+/* —— 渲染 starter chips（空狀態） —— */
+function renderStarters(){
+  const box = document.createElement("div");
+  box.className = "text-center py-10";
+  box.innerHTML = `
+    <div class="font-display text-[22px] font-semibold mb-1">企業法遵研究助理</div>
+    <p class="font-body text-[15px] text-[#5b554d] mb-6">以法規語料問答，附條文引用與可審查的引證依據</p>
+    <div class="flex flex-wrap justify-center gap-2 max-w-xl mx-auto">
+      ${STARTERS.map(s=>`<button class="chip starter" data-q="${s.replace(/"/g,'&quot;')}"><i data-lucide="sparkles" class="icon-xs"></i>${s}</button>`).join("")}
+    </div>`;
+  thread.appendChild(box);
+  box.querySelectorAll(".starter").forEach(b=> b.addEventListener("click", ()=> submit(b.dataset.q)));
+  icons();
+}
+
+/* —— 加一則 Q 氣泡 —— */
+function addQuestion(text){
+  const el = document.createElement("div");
+  el.className = "flex justify-end";
+  el.innerHTML = `<div class="font-body bg-[var(--ink-08)] rounded-2xl rounded-br-md px-4 py-2 max-w-[80%] text-[15px]">${escapeHtml(text)}</div>`;
+  thread.appendChild(el);
+}
+
+/* —— 加一則答案容器，回傳其控制介面 —— */
+function addAnswer(){
+  const el = document.createElement("div");
+  el.className = "space-y-3";
+  el.innerHTML = `
+    <div class="answer-prose stream-caret" data-answer></div>
+    <div data-sources class="space-y-2 hidden"></div>
+    <div data-chips class="flex flex-wrap gap-2 hidden"></div>
+    <div data-fb class="flex items-center gap-2 hidden">
+      <span class="text-[11px] text-[#8a8278]">這個回答有幫助嗎？</span>
+      <button class="fb-btn" data-rate="up" aria-label="有幫助"><i data-lucide="thumbs-up" class="icon-xs"></i></button>
+      <button class="fb-btn" data-rate="down" aria-label="沒幫助"><i data-lucide="thumbs-down" class="icon-xs"></i></button>
+    </div>`;
+  thread.appendChild(el);
+  scrollDown();
+  return {
+    answerEl: el.querySelector("[data-answer]"),
+    sourcesEl: el.querySelector("[data-sources]"),
+    chipsEl: el.querySelector("[data-chips]"),
+    fbEl: el.querySelector("[data-fb]"),
+  };
+}
+
+function escapeHtml(s){ const d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
+function scrollDown(){ requestAnimationFrame(()=> document.querySelector("main").scrollTo({top:1e9, behavior:"smooth"})); }
+
+/* —— 送出問題：SSE 串流 —— */
+async function submit(text){
+  if(state.answering) return;
+  const q = (text||"").trim(); if(!q) return;
+  document.querySelector("#thread > .text-center")?.remove(); // 移除空狀態
+  state.answering = true; document.getElementById("send").disabled = true;
+  document.getElementById("q").value = "";
+  addQuestion(q);
+  const ui = addAnswer();
+  let answerText = "";
+
+  try{
+    const resp = await fetch("/api/ask/stream", {
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ question:q, previous_response_id: state.previousResponseId }),
     });
-  </script>
+    if(!resp.ok || !resp.body) throw new Error("HTTP "+resp.status);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while(true){
+      const { done, value } = await reader.read();
+      if(done) break;
+      buf += decoder.decode(value, { stream:true });
+      const frames = buf.split("\n\n"); buf = frames.pop();
+      for(const frame of frames){
+        const line = frame.split("\n").find(l=> l.startsWith("data:"));
+        if(!line) continue;
+        const payload = line.slice(5).trim();
+        if(payload === "[DONE]") continue;
+        let evt; try{ evt = JSON.parse(payload); }catch{ continue; }
+        if(evt.type === "delta"){
+          answerText += evt.text;
+          ui.answerEl.innerHTML = md(answerText);
+          scrollDown();
+        } else if(evt.type === "final"){
+          finalizeAnswer(ui, q, answerText, evt);
+        }
+      }
+    }
+  }catch(err){
+    ui.answerEl.classList.remove("stream-caret");
+    ui.answerEl.innerHTML = `<p class="text-[var(--blood)] flex items-center gap-1.5"><i data-lucide="alert-circle" class="icon-sm"></i> 抱歉，發生錯誤，請稍後再試。</p>`;
+    icons();
+  }finally{
+    state.answering = false; document.getElementById("send").disabled = false;
+    ui.answerEl.classList.remove("stream-caret");
+  }
+}
+
+/* —— 串流結束：渲染來源、引證、chips、feedback —— */
+function finalizeAnswer(ui, question, answerText, evt){
+  ui.answerEl.classList.remove("stream-caret");
+  ui.answerEl.innerHTML = md(answerText);
+  state.previousResponseId = evt.response_id || state.previousResponseId;
+
+  // 彙整來源列（去重）
+  const cites = evt.citations || [];
+  state.lastEvidence = evt.evidence || [];
+  if(cites.length){
+    ui.sourcesEl.classList.remove("hidden");
+    ui.sourcesEl.innerHTML =
+      `<div class="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-[#8a8278] font-semibold mb-1">
+         <i data-lucide="library" class="icon-xs"></i> 來源 ${cites.length} 則 · 點擊展開引證</div>` +
+      cites.map((c,i)=>`
+        <div class="src-row" data-filename="${escapeHtml(c)}">
+          <span class="font-bold text-[var(--blood)] text-[12px]">${i+1}</span>
+          <span class="font-body text-[13px] flex-1">${escapeHtml(c)}</span>
+          <i data-lucide="panel-left-open" class="icon-xs text-[#c2bdb2]"></i>
+        </div>`).join("");
+    ui.sourcesEl.querySelectorAll(".src-row").forEach(r=>
+      r.addEventListener("click", ()=> openOffcanvas(r.dataset.filename)));
+    updateHamCount(state.lastEvidence.length || cites.length);
+  }
+
+  // feedback（需 query_log_id）
+  if(evt.query_log_id != null){
+    ui.fbEl.classList.remove("hidden");
+    ui.fbEl.querySelectorAll(".fb-btn").forEach(b=>
+      b.addEventListener("click", ()=> sendFeedback(ui.fbEl, evt.query_log_id, b.dataset.rate)));
+  }
+
+  icons();
+  // 追問建議（獨立呼叫，不阻斷主流程）
+  loadFollowups(ui.chipsEl, question, answerText);
+}
+
+/* —— suggestion chips —— */
+async function loadFollowups(chipsEl, question, answer){
+  try{
+    const r = await fetch("/api/suggest", { method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ question, answer }) });
+    if(!r.ok) return;
+    const { questions } = await r.json();
+    if(!questions || !questions.length) return;
+    chipsEl.classList.remove("hidden");
+    chipsEl.innerHTML =
+      `<span class="w-full flex items-center gap-1.5 text-[11px] text-[#8a8278] font-semibold">
+         <i data-lucide="sparkles" class="icon-xs"></i> 你可能想追問</span>` +
+      questions.map(q=>`<button class="chip followup" data-q="${escapeHtml(q)}"><i data-lucide="corner-down-right" class="icon-xs"></i>${escapeHtml(q)}</button>`).join("");
+    chipsEl.querySelectorAll(".followup").forEach(b=> b.addEventListener("click", ()=> submit(b.dataset.q)));
+    icons();
+  }catch{ /* 追問失敗不影響答案 */ }
+}
+
+/* —— feedback —— */
+async function sendFeedback(fbEl, queryLogId, rating){
+  fbEl.querySelectorAll(".fb-btn").forEach(b=> b.classList.toggle("active", b.dataset.rate===rating));
+  try{
+    await fetch("/api/feedback", { method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ query_log_id: queryLogId, rating }) });
+  }catch{ /* 靜默 */ }
+}
+
+/* —— offcanvas 控制 —— */
+const scrim = document.getElementById("scrim");
+const offcanvas = document.getElementById("offcanvas");
+const ocBody = document.getElementById("oc-body");
+
+function renderEvidence(activeFilename){
+  if(!state.lastEvidence.length){
+    ocBody.innerHTML = `<p class="font-body text-[14px] text-[#8a8278] text-center py-8">尚無引證依據</p>`;
+    return;
+  }
+  ocBody.innerHTML = state.lastEvidence.map((e,i)=>{
+    const active = e.filename===activeFilename ? " active" : "";
+    const score = (e.score!=null) ? Number(e.score).toFixed(2) : "";
+    return `
+      <div class="evi-card${active}" data-filename="${escapeHtml(e.filename||"")}" data-i="${i}">
+        <div class="flex items-center gap-1.5 text-[12px] font-semibold">
+          <i data-lucide="file-text" class="icon-xs"></i>
+          <span class="text-[var(--blood)] flex-1 truncate">${escapeHtml(e.filename||"")}</span>
+          <span class="text-[10px] text-[#9a948a] font-normal">${score}</span>
+        </div>
+        <div class="font-body text-[13px] leading-relaxed text-[#46413a] mt-2">${escapeHtml(e.text||"")}</div>
+        <button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
+          <i data-lucide="external-link" class="icon-xs"></i> 開啟原文全文</button>
+        <div class="full-text hidden font-body text-[13px] leading-relaxed text-[#46413a] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>
+      </div>`;
+  }).join("");
+  ocBody.querySelectorAll(".open-full").forEach(b=>
+    b.addEventListener("click", ()=> openFullText(b)));
+  icons();
+  const act = ocBody.querySelector(".evi-card.active");
+  if(act) act.scrollIntoView({ block:"nearest" });
+}
+
+/* —— 抽屜內展開原文全文 —— */
+async function openFullText(btn){
+  const card = btn.closest(".evi-card");
+  const box = card.querySelector(".full-text");
+  if(!box.classList.contains("hidden")){ box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.textContent = "載入中…";
+  try{
+    const r = await fetch("/api/source/"+encodeURIComponent(btn.dataset.filename));
+    if(!r.ok) throw 0;
+    const { text } = await r.json();
+    box.textContent = text || "（無內容）";
+  }catch{ box.textContent = "無法載入原文。"; }
+}
+
+function openOffcanvas(activeFilename){ renderEvidence(activeFilename); scrim.classList.add("open"); offcanvas.classList.add("open"); }
+function closeOffcanvas(){ scrim.classList.remove("open"); offcanvas.classList.remove("open"); }
+function updateHamCount(n){ const c=document.getElementById("ham-count"); if(n>0){ c.textContent=n; c.classList.remove("hidden"); c.classList.add("flex"); } }
+
+document.getElementById("ham").addEventListener("click", ()=>
+  offcanvas.classList.contains("open") ? closeOffcanvas() : openOffcanvas());
+document.getElementById("oc-close").addEventListener("click", closeOffcanvas);
+scrim.addEventListener("click", closeOffcanvas);
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeOffcanvas(); });
+
+// 點答案內的上標引用 → 開 offcanvas，高亮對應來源（依序號對到 evidence）
+thread.addEventListener("click", e=>{
+  const ref = e.target.closest(".cite-ref");
+  if(!ref) return;
+  e.preventDefault();
+  const idx = parseInt(ref.dataset.ref, 10) - 1;
+  const ev = state.lastEvidence[idx];
+  openOffcanvas(ev ? ev.filename : null);
+});
+
+document.getElementById("ask-form").addEventListener("submit", e=>{ e.preventDefault(); submit(document.getElementById("q").value); });
+document.getElementById("new-chat").addEventListener("click", ()=>{
+  state.previousResponseId=null; state.lastEvidence=[]; thread.innerHTML=""; closeOffcanvas();
+  document.getElementById("ham-count").classList.add("hidden"); renderStarters();
+});
+
+/* init */
+renderStarters(); icons();
+</script>
 </body>
 </html>
