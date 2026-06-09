@@ -11,6 +11,8 @@ from scripts.fetch_corpus import (
     normalize_article_number,
     sanitize_filename,
     parse_laws,
+    extract_pcode,
+    build_law_index,
     Article,
     _decode_bytes,
 )
@@ -139,3 +141,56 @@ class TestParseLaws:
     def test_no_whitelist_returns_all(self):
         laws = parse_laws(SAMPLE_XML, whitelist=None)
         assert len(laws) == 3
+
+
+# 含 <法規網址> 的假 XML，用來驗證 pcode 抽取與法規→pcode 索引。
+SAMPLE_XML_WITH_URL = """<?xml version="1.0" encoding="utf-8"?>
+<法規資料庫>
+  <法規>
+    <法規名稱>個人資料保護法</法規名稱>
+    <法規網址>https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=I0050021</法規網址>
+    <法規內容>
+      <條文>
+        <條號>第 十二 條</條號>
+        <條文內容>內容一。</條文內容>
+      </條文>
+    </法規內容>
+  </法規>
+  <法規>
+    <法規名稱>沒有網址的法</法規名稱>
+    <法規內容>
+      <條文>
+        <條號>第 一 條</條號>
+        <條文內容>內容二。</條文內容>
+      </條文>
+    </法規內容>
+  </法規>
+</法規資料庫>
+"""
+
+
+class TestExtractPcode:
+    def test_extracts_pcode_from_url(self):
+        url = "https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=I0050021"
+        assert extract_pcode(url) == "I0050021"
+
+    def test_extracts_pcode_with_trailing_query(self):
+        url = "https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=A0030154&kw=x"
+        assert extract_pcode(url) == "A0030154"
+
+    def test_no_pcode_returns_empty(self):
+        assert extract_pcode("https://law.moj.gov.tw/LawClass/LawAll.aspx") == ""
+
+    def test_none_returns_empty(self):
+        assert extract_pcode(None) == ""
+
+
+class TestBuildLawIndex:
+    def test_index_maps_law_to_pcode(self):
+        index = build_law_index(SAMPLE_XML_WITH_URL, whitelist={"個人資料保護法"})
+        assert index == {"個人資料保護法": "I0050021"}
+
+    def test_missing_url_yields_empty_pcode(self):
+        index = build_law_index(SAMPLE_XML_WITH_URL, whitelist=None)
+        assert index["個人資料保護法"] == "I0050021"
+        assert index["沒有網址的法"] == ""

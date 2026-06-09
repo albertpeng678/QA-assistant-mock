@@ -51,6 +51,7 @@ XML 結構（依 kong0107/mojLawSplit `lib/parseXML.js` 驗證）
 讓引用可回溯、且與條文檔共用同一套 file search 索引。
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -218,6 +219,51 @@ def parse_laws(xml_str: str, whitelist=None):
 
 
 # ---------------------------------------------------------------------------
+# pcode 抽取 + 法規→pcode 索引
+# ---------------------------------------------------------------------------
+# 全國法規資料庫「法規網址」形如 .../LawAll.aspx?pcode=I0050021，pcode 為大寫英數碼。
+_PCODE_RE = re.compile(r"pcode=([A-Z0-9]+)")
+
+
+def extract_pcode(url: Optional[str]) -> str:
+    """從法規網址抽出 pcode（如 I0050021）。抽不到/None 回空字串。"""
+    if not url:
+        return ""
+    m = _PCODE_RE.search(url)
+    return m.group(1) if m else ""
+
+
+def build_law_index(xml_str: str, whitelist=None) -> dict:
+    """解析 RAW XML，回傳 {法規名稱: pcode}。
+
+    pcode 自每部 <法規> 節點下的 <法規網址> 子元素抽取；該元素不存在或抽不到
+    pcode 時，pcode 設空字串並印警告（不中斷）。whitelist 過濾邏輯同 parse_laws。
+    """
+    root = ET.fromstring(xml_str)
+    law_nodes = list(root.iter("法規"))
+    if not law_nodes and root.tag == "法規":
+        law_nodes = [root]
+
+    index = {}
+    for law in law_nodes:
+        name_node = law.find("法規名稱")
+        if name_node is None or not _text(name_node):
+            name_node = law.find("中文法規名稱")
+        name = _text(name_node) if name_node is not None else ""
+        if not name:
+            continue
+        if whitelist is not None and name not in whitelist:
+            continue
+
+        url_node = law.find("法規網址")
+        pcode = extract_pcode(_text(url_node)) if url_node is not None else ""
+        if not pcode:
+            print(f"[警告] 法規「{name}」未取得 pcode（缺 <法規網址> 或無法解析），url attribute 將略過。")
+        index[name] = pcode
+    return index
+
+
+# ---------------------------------------------------------------------------
 # 下載 / 讀取
 # ---------------------------------------------------------------------------
 def _decode_bytes(raw: bytes) -> str:
@@ -283,6 +329,17 @@ def main():
         print(f"[警告] 白名單中未在 XML 找到：{', '.join(sorted(missing))}")
 
     n = write_articles(laws, out_dir=Path(args.out))
+
+    # 額外輸出 {法規名稱: pcode} 索引，供 ingest 組官方原文 url。
+    law_index = build_law_index(xml_str, whitelist=whitelist)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    index_path = out_dir / "_law_index.json"
+    index_path.write_text(
+        json.dumps(law_index, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"已寫出法規→pcode 索引：{index_path}（{len(law_index)} 部法規）")
+
     print(f"完成：共產生 {n} 個條文檔案，輸出至 {args.out}")
     print("提醒：個資非條文素材（QA-pair/函釋/裁罰）請人工另放，見本檔 docstring。")
 

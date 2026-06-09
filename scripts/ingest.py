@@ -2,6 +2,7 @@
 用法: python scripts/ingest.py
 完成後會印出 VECTOR_STORE_ID，請填入 Railway variables。
 """
+import json
 import os
 import re
 import sys
@@ -25,10 +26,26 @@ LAW_CATEGORY = {
 _FILENAME_RE = re.compile(r"^(?P<law>.+)-(?P<article>第[\d-]+條)$")
 
 
-def derive_attributes(filename: str) -> dict:
+# 官方單一條文頁 URL 模板（全國法規資料庫）。
+_LAW_SINGLE_URL = "https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode={pcode}&flno={flno}"
+
+
+def article_to_flno(article: str) -> str:
+    """條號 → flno：'第12條'→'12'、'第1-1條'→'1-1'、'第7條'→'7'。
+
+    去掉「第」「條」字，保留數字與中間的 '-'。空字串/無法解析回空字串。
+    """
+    if not article:
+        return ""
+    return article.replace("第", "").replace("條", "").strip()
+
+
+def derive_attributes(filename: str, law_index=None) -> dict:
     """從 {法規名稱}-第N條.txt 解析 per-file metadata attributes（值皆為 str）。
 
-    回傳 law / article / category / doc_type / source 五個 key（<16，符合上限）。
+    回傳 law / article / category / doc_type / source（<16，符合上限）。
+    若提供 law_index（{法規名稱: pcode}）且該 law 有非空 pcode，額外加 url
+    （指向官方單一條文頁）；否則不加 url，保持向後相容。
     解析不到時退回較安全的預設值，避免上傳中斷。
     """
     stem = Path(filename).stem  # 去副檔名
@@ -39,13 +56,19 @@ def derive_attributes(filename: str) -> dict:
     else:
         law = stem
         article = ""
-    return {
+    attrs = {
         "law": law,
         "article": article,
         "category": LAW_CATEGORY.get(law, "其他"),
         "doc_type": "法條",
         "source": "全國法規資料庫",
     }
+    if law_index:
+        pcode = law_index.get(law, "")
+        flno = article_to_flno(article)
+        if pcode and flno:
+            attrs["url"] = _LAW_SINGLE_URL.format(pcode=pcode, flno=flno)
+    return attrs
 
 # chunking 策略（依 context7 查得之 OpenAI file search static chunking 規格；openai-python，StaticFileChunkingStrategy）：
 #   max_chunk_size_tokens 合法區間 100–4096、預設 800；chunk_overlap_tokens 預設 400 且須 ≤ max/2。
@@ -65,6 +88,16 @@ def main():
     files = [p for p in DATA_DIR.iterdir() if p.is_file() and p.suffix in {".txt", ".md"}]
     if not files:
         sys.exit(f"{DATA_DIR} 內沒有 .txt/.md 語料檔")
+
+    # 載入法規→pcode 索引（fetch_corpus 產出），用以為各 chunk 加官方原文 url。
+    # 不存在則 law_index=None，derive_attributes 退回無 url 行為（向後相容）。
+    index_path = DATA_DIR / "_law_index.json"
+    law_index = None
+    if index_path.exists():
+        law_index = json.loads(index_path.read_text(encoding="utf-8"))
+        print(f"已載入法規→pcode 索引：{len(law_index)} 部法規")
+    else:
+        print("未找到 data/_law_index.json，將不附 url attribute（先跑 fetch_corpus.py 可產生）")
 
     client = OpenAI(api_key=api_key)
     vector_store = client.vector_stores.create(name="法規語料")
@@ -90,7 +123,7 @@ def main():
             continue
         file_specs.append({
             "file_id": f.id,
-            "attributes": derive_attributes(p.name),
+            "attributes": derive_attributes(p.name, law_index=law_index),
             "chunking_strategy": chunking_strategy,
         })
 
