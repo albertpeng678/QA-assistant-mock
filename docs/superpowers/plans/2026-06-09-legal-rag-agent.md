@@ -744,3 +744,45 @@ git commit -m "feat: SSE 串流問答 + markdown 指示 + gpt-5.4-mini 參數（
 - [ ] 對照 §9 成功標準逐項驗證
 - [ ] 三 auditor 全數通過
 - [ ] 用 `workshop/proposal-template.md` 吃 spec+plan → 生成 7 步提案
+
+---
+
+# 最終實作紀錄（2026-06-10，原 14 任務之後續完成）
+
+> 6 個起始缺口完成上線後，使用者再提「七項需求修正（Phase A）＋ 語料擴充（Phase B）」。
+> 完整介面/schema/語料盤點/驗證見 `docs/superpowers/specs/2026-06-09-legal-rag-7fixes-design.md` §A–I。本段為任務層摘要。
+> 規範：TDD（先紅再綠）、systematic-debugging（缺口①根因）、karpathy（最小改動）、playwright skill（E2E+MCP）。
+
+## Phase A — 七項需求修正（免重建索引，commit `101ad7d`，已 push main 部署）
+
+- [x] **① SSE 逐字串流**：root cause = 同步 `Stream` 在 `async def event_gen()` 內迭代阻塞 event loop。
+  `app/rag.py` 新增 `astream_answer`（`AsyncOpenAI`+`async for`）；`app/main.py` `/api/ask/stream` 改 async + `run_in_threadpool` 寫 log。
+  測試：`test_astream_answer_*`（用 fake AsyncStream、`asyncio.run` 驅動，免裝 pytest-asyncio）。
+- [x] **② 表格為主**：重寫 `ANSWER_INSTRUCTIONS`（表格智慧判斷 + GFM 規則）。測試 `test_answer_instructions_cover_table_and_certainty_tiers`。
+- [x] **③ 表格平滑渲染**：前端 `splitUnstableTail`/`renderStream` + rAF；修正 sanitize 順序。E2E 斷言 `<table>` 出現且無殘留 `|---`。
+- [x] **④ 只顯示被引用段落**：`parse_response` annotations 過濾（cited）+ 空時 top-5 by score（retrieved）+ `evidence_mode`。測試 `test_parse_response_filters_evidence_to_cited_files`、`test_parse_response_retrieved_mode_limits_and_sorts_by_score` 等。
+- [x] **⑤ 保留結構**：前端 `.legal-pre`（pre-wrap）。深層款/目縮排判定 cosmetic 未做。
+- [x] **⑥ 開啟原文連結**：`parse_response` 取 `result.attributes.url`（既有 store 已含 url，免重建）；前端按鈕改 `<a target=_blank>`。
+- [x] **⑦ 資料空白（prompt 層）**：IRAC + 確定性分層 + 區分「法律未明文 vs 語料未收錄」誠實兜底。
+- [x] **驗證**：pytest 75 綠 → E2E 9 綠（桌機+Pixel5）→ 真 API 抽查 → Playwright MCP 實機。`test_api.py::test_ask_stream_*` 改 patch async 路徑。`scripts/mock_server.py` 更新為新格式（表格/url/evidence_mode）。
+
+## Phase B — 語料擴充 + ingest 強化（commit `f4c00cf`，已 push main）
+
+- [x] **平行 agent 抓語料**（dispatching-parallel-agents；鐵則：只用真實官方開放資料、抓不到回報、**不杜撰**）：
+  - 施行細則 197（命令檔 `AuData=CM`，6 部）
+  - 函釋 666（金管會/勞動部/經濟部公司552/個資會/公平會；剔除 22 母法誤標）
+  - FAQ 169（個資/金融/消保/公司/公平/勞動，官網 Q&A + PDF 問答集）
+  - 判決 0（司法院 API 需帳密+限時段，未杜撰）
+- [x] **`scripts/ingest.py` 強化**（TDD via `test_ingest_metadata.py`）：
+  - `derive_attributes` 支援施行細則 + 非條文（`_NONARTICLE_RE` + `_parse_first_line` 首行 metadata → doc_type/母法/字號/發文日/對應條號 + authority_level/ref_no/effective_date）
+  - `is_empty_article` 略過純「（刪除）/（保留）」（精確比對）
+  - `LAW_CATEGORY` 補商業登記法/多層次傳銷管理法；url 僅阿拉伯條號
+  - **append 模式 `--vector-store-id`**：沿用同一 vector store、只上傳新語料（不再每次新建）
+- [x] **DB 稽核 agent**（release gate，判定 PASS-WITH-FIXES）：盤查組成/空殼/母法對應/重複/真實性/編碼 → 落實 P0/P1 修正（剔除 22、略過 141、補分類、防壞 URL）。
+- [x] **重建索引**：append 1032 檔到 `vs_6a27e1fb…`（同 ID、3 批 completed/failed=0、Railway 變數免改）。上線檢索抽查確認施行細則/函釋/FAQ 進得了檢索、補足空白。
+
+## 未竟（後續）
+
+- [ ] **判決語料**：取得司法院 opendata 帳密（環境變數）後，於 00–06 時段以 `Auth→JList→JDoc` 補；建議改用裁判書查詢系統挑案號再 `JDoc` 逐則抓。
+- [ ] **金鑰撤換**：`.env`/對話外洩之 `sk-svcacct-…`。
+- [ ] **（選）公司法函釋抽樣**：目前 ~48%（結構性，已保留全量）；如要更均衡可依時近性抽樣。

@@ -11,6 +11,19 @@
 
 > ⚠️ **不要自建 RAG**（不要裝 LangChain/向量資料庫）。引擎就是 OpenAI file search 託管服務 —— 這是 3 小時做得完的關鍵。
 
+## 目前實作狀態（2026-06，給接手的 Claude）
+
+> 6 個起始缺口**已全部補完**並上線；其後又完成「七項需求修正（Phase A）＋ 語料擴充（Phase B）」。
+> 詳見 `docs/superpowers/specs/2026-06-09-legal-rag-7fixes-design.md`（含程式介面、attributes schema、語料盤點、驗證）。
+
+- **問答管線**：`app/rag.py` `answer_question`(同步) / `astream_answer`(async，SSE 用) → `parse_response` 回 `{answer, citations, evidence, evidence_mode, response_id, usage}`。
+- **SSE 逐字串流**：`/api/ask/stream` 用 `AsyncOpenAI` + `astream_answer`（同步 Stream 放 async generator 會阻塞 event loop，是逐字失效的根因）；DB log 走 `run_in_threadpool`。
+- **引證（只顯示被引用）**：annotations 有就過濾被引用檔（`evidence_mode="cited"`）；空就退回 top-5 by score（`retrieved`，`EVIDENCE_DISPLAY_LIMIT`）。gpt-5.4-mini annotations 常空，故多走 top-5。
+- **輸出格式**：`ANSWER_INSTRUCTIONS` 走「表格為主（智慧判斷）＋ 確定性分層【明文】【解釋/裁量】【實務見解】【語料未涵蓋】＋ 區分『法律未明文 vs 語料未收錄』」。前端 `static/index.html` 串流時緩衝未成形表格（`splitUnstableTail`/`renderStream`），證據用 `.legal-pre` 保留換行，原文以官方 url 外連。
+- **語料（`data/`，~2074 檔上傳）**：法條 1042 + 施行細則 197 + 函釋 666 + FAQ 169（皆真實政府開放資料）。doc_type ∈ {法條, 施行細則, 函釋, FAQ, 判決, 裁罰}。**判決尚缺**（司法院 API 需帳密+限時段）。
+- **語料來源**：法律檔 `AuData=CF`、命令檔（施行細則）`AuData=CM`；函釋/FAQ 為各主管機關開放資料/官網問答，**檔名 `{簡稱}-{doc_type}-{標題}.txt`、首行管線 metadata**（`來源|效力|字號|發文日|對應條號|母法`）。
+- **vector store**：`vs_6a27e1fb471c8191aad6e549fb7f2492`（**單一、用 append 維護**，勿每次新建）。
+
 ## 整體流程（你會走的路）
 
 1. **brainstorming** 釐清要做什麼，順手用 **visual companion + frontend-design** 出前端 mockup
@@ -42,15 +55,22 @@
 ## 硬約束
 
 - **部署走 GitHub 連結式 CICD**：push 到 GitHub → Railway 連結該 repo → 自動 build。**不要用 `railway up` 本地直推**。
-- **Secrets 走環境變數**：`OPENAI_API_KEY`、`VECTOR_STORE_ID`、`OPENAI_MODEL` 進 Railway variables，**不要進 repo**。
-- file search 的 chunking 只有兩顆旋鈕（`max_chunk_size_tokens` 100–4096、`chunk_overlap_tokens` ≤ max/2）；structure-awareness 靠**上傳前的語料前處理**。
+- **Secrets 走環境變數**：`OPENAI_API_KEY`、`VECTOR_STORE_ID`、`OPENAI_MODEL`、`DATABASE_URL`、`SENTRY_DSN` 走 `.env`(本地) / Railway variables，**不要進 repo**。`VECTOR_STORE_ID` 用 append 維護同一個，重建索引通常**不需改 Railway 變數**。
+- file search 的 chunking 只有兩顆旋鈕（`max_chunk_size_tokens` 100–4096、`chunk_overlap_tokens` ≤ max/2）；structure-awareness 靠**上傳前的語料前處理**（含 doc_type、首行 metadata、url attribute）。
+- **語料品質**：補語料只用真實官方開放資料、不杜撰；新增資料型別後跑 DB 稽核盤查（編碼/空殼/母法對應/重複/真實性）。
 
 ## 常用指令
 
 ```bash
-python -m venv .venv && . .venv/Scripts/activate   # Windows
+python -m venv .venv && . .venv/bin/activate       # macOS/Linux（Windows: .venv\Scripts\activate）
 pip install -r requirements.txt
-pytest -v                          # 跑測試（起點 3 紅 4 綠）
+pytest -q                          # 全測試（目前 81 綠）
 uvicorn app.main:app --reload      # 本地啟動 http://localhost:8000
-python scripts/ingest.py           # 建語料索引（補完缺口 2/3 後）
+npx playwright test                # 前端 E2E（對 scripts/mock_server.py:8001；先 npx playwright install chromium）
+python scripts/mock_server.py      # 前端離線驗收 mock（固定假資料，無 OpenAI/DB）
+
+# 語料 → 索引
+python scripts/fetch_corpus.py --xml <CF.xml>      # 法律檔（AuData=CF）；命令檔(施行細則)用 AuData=CM 下載
+python scripts/ingest.py                            # 新建 vector store（首建）
+python scripts/ingest.py --vector-store-id <vsid>   # append 模式：加新語料到既有 store（ID 不變、Railway 免改）
 ```
