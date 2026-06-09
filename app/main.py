@@ -37,7 +37,10 @@ except ImportError:  # pragma: no cover - 部署環境才裝
     sentry_sdk = None
 
 if sentry_sdk is not None and os.getenv("SENTRY_DSN"):
-    sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.1)
+    try:
+        sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.1)
+    except Exception as e:  # noqa: BLE001 - 壞 DSN 不可拖垮 app 啟動
+        logging.warning("Sentry 初始化失敗: %s", e)
 
 
 def _capture(exc):
