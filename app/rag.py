@@ -28,9 +28,30 @@ def _strip_citation_markers(text):
 
 
 ANSWER_INSTRUCTIONS = (
-    "你是台灣企業法遵研究助理。回答務必：以繁體中文；使用 Markdown 結構——"
-    "重點用條列（- ），有層次時用巢狀縮排，段落之間以空行分隔；先結論後依據；"
-    "引用條文時標明法規名稱與條號。本回答為研究輔助，非正式法律意見。"
+    "你是台灣企業法遵研究助理。一律以繁體中文、Markdown 作答，並遵循下列規則。\n"
+    "\n"
+    "【輸出結構：表格為主、文字為輔（智慧判斷）】\n"
+    "1. 先用一句話下結論；涉及解釋空間時明說「此題無單一確定答案」。\n"
+    "2. 可結構化的內容（多項對照、條文清單、義務/罰則、要件檢核）一律用 GFM Markdown 表格，"
+    "建議欄位：｜項目／情境｜法規依據（法規名稱＋條號）｜重點說明｜注意事項｜，"
+    "同一表格欄位數固定、每列一次寫完、儲存格保持單行精簡；儲存格內出現 | 一律寫成全形｜。\n"
+    "3. 單一結論、推理論證、需解釋衡量的內容用段落，不要硬塞進表格。\n"
+    "\n"
+    "【確定性分層：每個依據標明層級】\n"
+    "- 【明文】法律明文規定，附法規名稱與條號。\n"
+    "- 【解釋/裁量】條文須解釋或屬主管機關裁量；說明理由與前提。\n"
+    "- 【實務見解】函釋、判決、通說，註明來源與權威性。\n"
+    "- 【語料未涵蓋】檢索不到依據時，明確聲明本系統語料未收錄，不要編造。\n"
+    "務必區分『法律確實未明文規定』與『本系統語料未收錄』兩者，不可混為一談。\n"
+    "\n"
+    "【法律刻意保留的解釋空間】\n"
+    "當存在複數合理解釋時，列出各說（甲說／乙說）的論據與適用情境，標示傾向與前提假設，"
+    "不得武斷給單一答案。涉及個案事實認定、金額試算或訴訟策略時，加註"
+    "「此問題涉及個案判斷，建議諮詢專業律師」。\n"
+    "\n"
+    "【接地與引用】僅依檢索到的條文／函釋作答，逐點標明出處（法規名稱＋條號），"
+    "不確定時用「依現有語料…」而非絕對斷言，嚴禁杜撰條號、金額或來源。\n"
+    "結尾固定附：本回答為研究輔助，非正式法律意見。"
 )
 
 # gpt-5.4-mini 為推理模型：用 reasoning/text.verbosity，不可傳 temperature/top_p。
@@ -41,14 +62,56 @@ _MODEL_PARAMS = {
 }
 
 
-def parse_response(response):
-    """把 Responses API 回應解析為 {"answer": str, "citations": [str], "evidence": [{"filename", "text", "score"}], "response_id": str|None}。
+# retrieved（無 annotations）模式下，最多顯示幾則檢索依據（依分數）。
+EVIDENCE_DISPLAY_LIMIT = 5
 
-    🎯 缺口 1（核心，有測試）：實作此函式，讓 test_rag.py 的 parse_response 測試通過。
+
+def _result_url(r):
+    """從 file_search result 的 attributes 取官方原文 url（缺口⑥）；無則回 None。
+
+    attributes 為上傳時掛在 vector store file 的 metadata（dict）；
+    亦相容物件型別（getattr）。
+    """
+    attrs = getattr(r, "attributes", None)
+    if not attrs:
+        return None
+    if isinstance(attrs, dict):
+        return attrs.get("url")
+    return getattr(attrs, "url", None)
+
+
+def _dedupe_evidence(entries):
+    """同檔名去重：保留分數最高的 chunk，維持首次出現順序；移除內部 _file_id 鍵。"""
+    best = {}
+    order = []
+    for e in entries:
+        fn = e["filename"]
+        if fn not in best:
+            best[fn] = e
+            order.append(fn)
+        elif (e.get("score") or 0) > (best[fn].get("score") or 0):
+            best[fn] = e
+    out = []
+    for fn in order:
+        e = dict(best[fn])
+        e.pop("_file_id", None)
+        out.append(e)
+    return out
+
+
+def parse_response(response):
+    """把 Responses API 回應解析為
+    {"answer", "citations", "evidence", "evidence_mode", "response_id", "usage"}。
+
+    缺口④：evidence 只保留「真正被引用」的段落——以 message annotations
+    （type=file_citation）的 file_id/filename 過濾 file_search_call.results；
+    annotations 為空時（gpt-5.4-mini 常見）退回全部檢索結果並標 evidence_mode="retrieved"。
+    缺口⑥：evidence 附官方原文 url（取自 result.attributes）。
     """
     answer_parts = []
     citations = []
     seen = set()
+    cited_ids = set()  # 被引用的 file_id / filename（annotations 衍生）
     for item in response.output:
         if getattr(item, "type", None) != "message":
             continue
@@ -58,27 +121,47 @@ def parse_response(response):
                 answer_parts.append(text)
             for annotation in getattr(content, "annotations", None) or []:
                 filename = getattr(annotation, "filename", None)
+                file_id = getattr(annotation, "file_id", None)
                 if filename and filename not in seen:
                     seen.add(filename)
                     citations.append(filename)
-    evidence = []
+                if filename:
+                    cited_ids.add(filename)
+                if file_id:
+                    cited_ids.add(file_id)
+
+    # 收集全部檢索結果（含 url），稍後依 cited 與否過濾。
+    all_results = []
     for item in response.output:
         if getattr(item, "type", None) != "file_search_call":
             continue
         for r in getattr(item, "results", None) or []:
-            evidence.append({
+            entry = {
                 "filename": getattr(r, "filename", None),
                 "text": getattr(r, "text", None),
                 "score": getattr(r, "score", None),
-            })
-    # annotations 收集後若為空（gpt-5.4-mini 實測 annotations 常為空陣列），
-    # fallback 從 evidence 檔名衍生 citations（去重保序）。
-    if not citations:
-        for ev in evidence:
-            filename = ev.get("filename")
-            if filename and filename not in seen:
-                seen.add(filename)
-                citations.append(filename)
+                "_file_id": getattr(r, "file_id", None),
+            }
+            url = _result_url(r)
+            if url:
+                entry["url"] = url
+            all_results.append(entry)
+
+    # evidence：有 annotations 就只留被引用檔（cited，精準）；否則退回 retrieved，
+    # 依分數取 top-N（避免把全部檢索段落都倒給使用者），並讓來源列與顯示一致。
+    if cited_ids:
+        kept = [e for e in all_results
+                if e["filename"] in cited_ids or e["_file_id"] in cited_ids]
+        evidence = _dedupe_evidence(kept)
+        evidence_mode = "cited"
+    else:
+        deduped = _dedupe_evidence(all_results)
+        deduped.sort(key=lambda e: (e.get("score") or 0), reverse=True)
+        evidence = deduped[:EVIDENCE_DISPLAY_LIMIT]
+        evidence_mode = "retrieved"
+        # citations（來源列）對齊實際顯示的 evidence，不再傾倒全部檔名。
+        citations = [e["filename"] for e in evidence]
+
     usage_obj = getattr(response, "usage", None)
     usage = {
         "input_tokens": getattr(usage_obj, "input_tokens", 0) or 0,
@@ -89,6 +172,7 @@ def parse_response(response):
         "answer": _strip_citation_markers("".join(answer_parts)),
         "citations": citations,
         "evidence": evidence,
+        "evidence_mode": evidence_mode,
         "response_id": getattr(response, "id", None),
         "usage": usage,
     }
@@ -135,6 +219,29 @@ def stream_answer(client, question, *, vector_store_id, model, previous_response
             continue
         # 只接受答案文字增量事件（output_text.delta）；推理模型的 reasoning/function_call
         # delta 事件雖也帶 .delta 屬性，但屬思考鏈，不可洩漏進答案串流。
+        delta = getattr(event, "delta", None)
+        if event_type.endswith("output_text.delta") and isinstance(delta, str):
+            yield {"type": "delta", "text": delta}
+    if final_response is not None:
+        yield {"type": "final", **parse_response(final_response)}
+
+
+async def astream_answer(client, question, *, vector_store_id, model, previous_response_id=None):
+    """SSE 串流問答的「非阻塞」版本（缺口①）。
+
+    用 AsyncOpenAI + `async for`，避免同步 Stream 在 async generator 內阻塞 event loop、
+    導致 token 批次沖出（非逐字）。事件語意與 stream_answer 相同：
+    逐 output_text.delta yield {"type":"delta",...}，最後 yield {"type":"final", **parse_response}。
+    """
+    kwargs = _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
+    kwargs["stream"] = True
+    final_response = None
+    stream = await client.responses.create(**kwargs)
+    async for event in stream:
+        event_type = getattr(event, "type", None) or ""
+        if "response.completed" in event_type and getattr(event, "response", None) is not None:
+            final_response = event.response
+            continue
         delta = getattr(event, "delta", None)
         if event_type.endswith("output_text.delta") and isinstance(delta, str):
             yield {"type": "delta", "text": delta}

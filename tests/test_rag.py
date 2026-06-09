@@ -208,3 +208,143 @@ def test_stream_answer_skips_reasoning_deltas():
     assert deltas == [{"type": "delta", "text": "正式答案"}]
     assert "思考中…" not in [d["text"] for d in deltas]
     assert events[-1]["type"] == "final"
+
+
+# ---- (E) 缺口④/⑥：evidence 只留真正被引用的段落 + 帶官方原文 url ----
+def test_parse_response_filters_evidence_to_cited_files():
+    # annotations 指明只引用 A 檔；檢索結果含 A、B → evidence 僅保留 A，且標 mode=cited。
+    ann = SimpleNamespace(type="file_citation", file_id="file-A", filename="個人資料保護法-第12條.txt")
+    content = SimpleNamespace(text="應通知當事人。", annotations=[ann])
+    message = SimpleNamespace(type="message", content=[content])
+    rA = SimpleNamespace(file_id="file-A", filename="個人資料保護法-第12條.txt", text="A 段", score=0.91,
+                         attributes={"url": "https://law.moj.gov.tw/A"})
+    rB = SimpleNamespace(file_id="file-B", filename="個人資料保護法-第22條.txt", text="B 段", score=0.88,
+                         attributes={"url": "https://law.moj.gov.tw/B"})
+    fs = SimpleNamespace(type="file_search_call", content=None, results=[rA, rB])
+    result = parse_response(SimpleNamespace(output=[fs, message], id="r1"))
+    assert [e["filename"] for e in result["evidence"]] == ["個人資料保護法-第12條.txt"]
+    assert result["evidence_mode"] == "cited"
+    assert result["evidence"][0]["url"] == "https://law.moj.gov.tw/A"
+
+
+def test_parse_response_evidence_url_omitted_when_no_attributes():
+    # 既有契約：無 attributes 的 result，evidence dict 不含 url 鍵（向後相容、不污染既有測試）。
+    result = parse_response(_fake_response_with_results())
+    assert "url" not in result["evidence"][0]
+
+
+def test_parse_response_retrieved_mode_limits_and_sorts_by_score():
+    # annotations 空時退回 retrieved：依分數取 top-5，且 citations（來源列）與顯示一致，
+    # 避免「把全部檢索段落都倒出來」（缺口④的實務情形：gpt-5.4-mini annotations 常空）。
+    content = SimpleNamespace(text="回答。", annotations=[])
+    message = SimpleNamespace(type="message", content=[content])
+    scores = [0.50, 0.95, 0.60, 0.80, 0.40, 0.70, 0.90]
+    results = [SimpleNamespace(file_id=f"f{i}", filename=f"法-第{i}條.txt", text=f"段{i}", score=s)
+               for i, s in enumerate(scores, start=1)]
+    fs = SimpleNamespace(type="file_search_call", content=None, results=results)
+    result = parse_response(SimpleNamespace(output=[fs, message]))
+    assert result["evidence_mode"] == "retrieved"
+    assert len(result["evidence"]) == 5
+    got = [e["score"] for e in result["evidence"]]
+    assert got == sorted(got, reverse=True)
+    assert result["citations"] == [e["filename"] for e in result["evidence"]]
+
+
+def test_parse_response_evidence_mode_retrieved_and_dedup_when_no_annotations():
+    # annotations 空（gpt-5.4-mini 常見）→ mode=retrieved，且同檔多 chunk 去重保留最高分。
+    content = SimpleNamespace(text="回答。", annotations=[])
+    message = SimpleNamespace(type="message", content=[content])
+    r1 = SimpleNamespace(file_id="f1", filename="個人資料保護法-第12條.txt", text="高分段", score=0.91)
+    r2 = SimpleNamespace(file_id="f2", filename="個人資料保護法-第6條.txt", text="次段", score=0.80)
+    r3 = SimpleNamespace(file_id="f1", filename="個人資料保護法-第12條.txt", text="低分重複段", score=0.70)
+    fs = SimpleNamespace(type="file_search_call", content=None, results=[r1, r2, r3])
+    result = parse_response(SimpleNamespace(output=[fs, message]))
+    assert result["evidence_mode"] == "retrieved"
+    assert [e["filename"] for e in result["evidence"]] == ["個人資料保護法-第12條.txt", "個人資料保護法-第6條.txt"]
+    assert result["evidence"][0]["text"] == "高分段"  # 同檔保留最高分 chunk
+
+
+# ---- (F) 缺口①：astream_answer 以 AsyncOpenAI 非阻塞逐字串流 ----
+import asyncio
+from app.rag import astream_answer
+
+
+class _FakeAsyncStream:
+    def __init__(self, events):
+        self._events = list(events)
+        self._i = 0
+
+    def __aiter__(self):
+        self._i = 0
+        return self
+
+    async def __anext__(self):
+        if self._i >= len(self._events):
+            raise StopAsyncIteration
+        ev = self._events[self._i]
+        self._i += 1
+        return ev
+
+
+class _FakeAsyncResponses:
+    def __init__(self, events):
+        self._events = events
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeAsyncStream(self._events)
+
+
+class _FakeAsyncClient:
+    def __init__(self, events):
+        self.responses = _FakeAsyncResponses(events)
+
+
+def _drain_async(agen):
+    async def collect():
+        return [e async for e in agen]
+    return asyncio.run(collect())
+
+
+def test_astream_answer_yields_deltas_then_final():
+    d1 = SimpleNamespace(type="response.output_text.delta", delta="部分")
+    d2 = SimpleNamespace(type="response.output_text.delta", delta="答案")
+    completed = SimpleNamespace(type="response.completed", response=_fake_response_with_results())
+    client = _FakeAsyncClient([d1, d2, completed])
+
+    events = _drain_async(
+        astream_answer(client, "個資外洩?", vector_store_id="vs_1", model="gpt-5.4-mini")
+    )
+
+    assert events[0] == {"type": "delta", "text": "部分"}
+    assert events[1] == {"type": "delta", "text": "答案"}
+    assert events[2]["type"] == "final"
+    assert events[2]["citations"] == ["個資法-第12條.txt"]
+    assert client.responses.calls[0]["stream"] is True
+    assert client.responses.calls[0]["reasoning"] == {"effort": "low"}
+
+
+def test_astream_answer_skips_reasoning_deltas():
+    reasoning = SimpleNamespace(type="response.reasoning_summary_text.delta", delta="思考中…")
+    answer = SimpleNamespace(type="response.output_text.delta", delta="正式答案")
+    completed = SimpleNamespace(type="response.completed", response=_fake_response_with_results())
+    client = _FakeAsyncClient([reasoning, answer, completed])
+
+    events = _drain_async(
+        astream_answer(client, "個資外洩?", vector_store_id="vs_1", model="gpt-5.4-mini")
+    )
+
+    deltas = [e for e in events if e["type"] == "delta"]
+    assert deltas == [{"type": "delta", "text": "正式答案"}]
+    assert events[-1]["type"] == "final"
+
+
+# ---- (G) 缺口②/⑦：新 ANSWER_INSTRUCTIONS 涵蓋表格 + 確定性層級 + 誠實兜底 ----
+def test_answer_instructions_cover_table_and_certainty_tiers():
+    text = ANSWER_INSTRUCTIONS
+    assert "表格" in text                       # ②表格為主（智慧判斷）
+    assert "非正式法律意見" in text or "非法律意見" in text
+    # ⑦：區分明文 / 解釋空間 / 語料未涵蓋（誠實兜底）
+    for token in ["明文", "解釋", "語料"]:
+        assert token in text

@@ -21,7 +21,10 @@ async function askFirstStarter(page: Page) {
 
   const answer = page.locator("[data-answer]");
   await expect(answer).toBeVisible();
-  // 串流完成的訊號：final 後 markdown 重渲染出 3 個上標引用
+  // 串流「真正完成」的訊號：來源列（.src-row）只在 finalizeAnswer 渲染。
+  // 不可只等上標引用——串流途中 markdown 即時渲染就會出現上標，但 final 會以
+  // innerHTML 重渲染整段、置換這些節點，若此時點擊會點到已脫離的舊節點。
+  await expect(page.locator(".src-row")).toHaveCount(3);
   await expect(page.locator("[data-answer] sup a.cite-ref")).toHaveCount(3);
   await expect(answer).toContainText("通知當事人");
 }
@@ -59,21 +62,43 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(active).toContainText("第12條");
   });
 
-  test("開啟原文全文抽屜內展開", async ({ page }) => {
+  test("開啟官方原文為外連連結（缺口⑥）", async ({ page }) => {
     await askFirstStarter(page);
     await page.locator('[data-answer] .cite-ref[data-ref="1"]').click();
     await expect(page.locator("#offcanvas")).toHaveClass(/open/);
 
-    const firstCard = page.locator(".evi-card").first();
-    const fullText = firstCard.locator(".full-text");
-    await expect(fullText).toBeHidden();
+    // 不再是展開重複內容，而是指向全國法規資料庫官方原文的真連結
+    const link = page.locator(".evi-card").first().locator("a.open-link");
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute(
+      "href",
+      /law\.moj\.gov\.tw\/LawClass\/LawSingle\.aspx\?pcode=.+&flno=12/
+    );
+    await expect(link).toHaveAttribute("target", "_blank");
+  });
 
-    await firstCard.locator(".open-full").click();
+  test("表格平滑渲染為 HTML 表格、無殘留 markdown 符號（缺口②③）", async ({ page }) => {
+    await askFirstStarter(page);
+    const answer = page.locator("[data-answer]");
+    await expect(answer.locator("table")).toBeVisible();
+    await expect(answer.locator("table thead th")).toHaveCount(3);
+    // final 後不應殘留暫顯尾段或未渲染的分隔列符號
+    await expect(answer.locator(".md-pending")).toHaveCount(0);
+    await expect(answer).not.toContainText("|---");
+  });
 
-    await expect(fullText).toBeVisible();
-    await expect(fullText).not.toBeEmpty();
-    // mock /api/source 回傳的全文含此標記
-    await expect(fullText).toContainText("mock 全文");
+  test("確定性層級標籤渲染為 chip（缺口⑦）", async ({ page }) => {
+    await askFirstStarter(page);
+    const answer = page.locator("[data-answer]");
+    await expect(answer.locator(".tier-explicit")).toContainText("明文");
+    await expect(answer.locator(".tier-interpret")).toBeVisible();
+  });
+
+  test("引證依據誠實標示『答案引用來源』（缺口④）", async ({ page }) => {
+    await askFirstStarter(page);
+    await page.locator('[data-answer] .cite-ref[data-ref="1"]').click();
+    await expect(page.locator("#offcanvas")).toHaveClass(/open/);
+    await expect(page.locator("#oc-body")).toContainText("答案引用來源");
   });
 
   test("追問 chip 與 feedback", async ({ page }) => {

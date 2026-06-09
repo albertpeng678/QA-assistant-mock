@@ -78,7 +78,8 @@ def test_ask_logs_but_failure_does_not_break_response(override_answerer, monkeyp
 # ---------- /api/ask/stream (SSE) ----------
 
 def test_ask_stream_emits_deltas_and_final(monkeypatch):
-    def fake_stream(client_, question, **kw):
+    # 缺口①：串流改走非阻塞 astream_answer（async generator）+ AsyncOpenAI。
+    async def fake_astream(client_, question, **kw):
         yield {"type": "delta", "text": "依個資法"}
         yield {"type": "delta", "text": "第12條"}
         yield {
@@ -86,13 +87,14 @@ def test_ask_stream_emits_deltas_and_final(monkeypatch):
             "answer": "依個資法第12條…",
             "citations": ["個資法.txt"],
             "evidence": [],
+            "evidence_mode": "cited",
             "response_id": "resp_s",
             "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
         }
 
-    monkeypatch.setattr(main, "stream_answer", fake_stream)
+    monkeypatch.setattr(main, "astream_answer", fake_astream)
     monkeypatch.setattr(main, "log_query", lambda **kw: 7)
-    monkeypatch.setattr(main, "OpenAI", lambda **kw: object())
+    monkeypatch.setattr(main, "AsyncOpenAI", lambda **kw: object())
 
     with client.stream("POST", "/api/ask/stream", json={"question": "問"}) as resp:
         assert resp.status_code == 200

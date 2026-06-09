@@ -20,13 +20,14 @@ from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from openai import OpenAI
+from starlette.concurrency import run_in_threadpool
+from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from app import config
 from app.db import Feedback, QueryLog, make_session_factory
-from app.rag import answer_question, stream_answer, suggest_followups
+from app.rag import answer_question, astream_answer, suggest_followups
 
 logger = logging.getLogger(__name__)
 
@@ -183,11 +184,13 @@ def ask(req: AskRequest, answerer=Depends(get_answerer)):
 # ---------- /api/ask/stream (SSE) ----------
 @app.post("/api/ask/stream")
 async def ask_stream(req: AskRequest):
-    client = OpenAI(api_key=config.OPENAI_API_KEY)
+    # 缺口①：用 AsyncOpenAI + async for（astream_answer）逐字串流，不阻塞 event loop；
+    # 同步 DB log 以 run_in_threadpool 卸到執行緒池，避免再次阻塞串流。
+    client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
     start = time.perf_counter()
 
     async def event_gen():
-        for item in stream_answer(
+        async for item in astream_answer(
             client, req.question,
             vector_store_id=config.VECTOR_STORE_ID,
             model=config.OPENAI_MODEL,
@@ -198,7 +201,7 @@ async def ask_stream(req: AskRequest):
                 fields = _build_log_fields(
                     req.question, item, latency_ms, req.previous_response_id
                 )
-                query_log_id = _safe_log_query(**fields)
+                query_log_id = await run_in_threadpool(_safe_log_query, **fields)
                 item = {**item, "query_log_id": query_log_id}
             yield {"data": json.dumps(item, ensure_ascii=False)}
         yield {"event": "done", "data": "[DONE]"}

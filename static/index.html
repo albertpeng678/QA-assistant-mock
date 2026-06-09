@@ -55,6 +55,25 @@
   .answer-prose sup a{ color:var(--blood); font-weight:700; text-decoration:none; font-size:.7em; padding:0 1px; }
   .cite-ref:focus-visible{ outline:2px solid var(--blood); outline-offset:2px; border-radius:3px; }
 
+  /* —— 缺口③：表格平滑渲染 + 表格樣式 —— */
+  .answer-prose table{ border-collapse:collapse; width:100%; margin:.6em 0; font-size:.92em; }
+  .answer-prose th,.answer-prose td{ border:1px solid var(--ink-20); padding:.4em .6em; text-align:left; vertical-align:top; }
+  .answer-prose thead th{ background:var(--ink-08); font-family:'Public Sans'; font-weight:700; }
+  .answer-prose tbody tr:nth-child(even){ background:#1a17140a; }
+  /* 串流中尚未成形的尾段：以淡墨純文字暫顯，避免閃現 markdown 原始符號 */
+  .md-pending{ color:var(--ink-35); white-space:pre-wrap; }
+
+  /* —— 缺口⑤：保留法條原始換行/縮排結構 —— */
+  .legal-pre{ white-space:pre-wrap; word-break:break-word; }
+
+  /* —— 缺口⑦：確定性層級標籤（嚴守三色，靠墨/血濃淡區分強調）—— */
+  .tier{ display:inline-block; font-family:'Public Sans'; font-size:.74em; font-weight:700;
+         padding:.05em .5em; border-radius:5px; margin-right:.3em; border:1px solid var(--ink-20); }
+  .tier-explicit{ color:var(--ink-90); border-color:var(--ink-35); }
+  .tier-interpret{ color:var(--blood); border-color:#7a2e2e55; }
+  .tier-practice{ color:var(--ink-70); }
+  .tier-gap{ color:var(--paper); background:var(--blood); border-color:var(--blood); }
+
   /* —— 串流游標 —— */
   .stream-caret::after{ content:'▍'; color:var(--blood); animation:blink 1s steps(2) infinite; margin-left:1px; }
   @keyframes blink{ 0%,50%{opacity:1} 50.01%,100%{opacity:0} }
@@ -159,7 +178,39 @@ const footnotes = (html) => html.replace(/\[\^(\d+)\]/g,
   '<sup><a href="#" class="cite-ref" data-ref="$1">$1</a></sup>');
 // 剝除 gpt-5.4-mini 的 inline 引用標記（U+E200–E20F 私用區字元 + turnXfileY token），避免漏進答案
 const stripCite = (t) => (t || "").replace(/\ue200[\s\S]*?\ue201/g, "");
-const md = (t) => footnotes(DOMPurify.sanitize(marked.parse(stripCite(t), { breaks:true, gfm:true })));
+// 缺口⑦：把確定性層級標籤 【明文】【解釋/裁量】【實務見解】【語料未涵蓋】 包成樣式 chip
+const TIER_CLASS = { "明文":"tier-explicit", "解釋/裁量":"tier-interpret", "解釋":"tier-interpret",
+                     "實務見解":"tier-practice", "語料未涵蓋":"tier-gap" };
+const tierTags = (html) => html.replace(/【(明文|解釋\/裁量|解釋|實務見解|語料未涵蓋)】/g,
+  (_, k) => `<span class="tier ${TIER_CLASS[k]}">${k}</span>`);
+// 穩定全文渲染：marked → DOMPurify 淨化 → 腳註上標 + 層級 chip
+const md = (t) => tierTags(footnotes(DOMPurify.sanitize(marked.parse(stripCite(t), { breaks:true, gfm:true }))));
+
+// 缺口③：串流途中把「尚未成形的尾段」切出來暫緩 render，避免閃現原始 markdown 符號。
+//   - 未閉合 code fence（``` 數為奇數）→ 從最後一個 fence 起暫緩
+//   - 未出現分隔列 |---| 的表格尾塊 → 整塊暫緩，待分隔列到齊才交給 marked
+function splitUnstableTail(text){
+  if (((text.match(/```/g) || []).length) % 2 === 1){
+    const i = text.lastIndexOf("```");
+    return [text.slice(0, i), text.slice(i)];
+  }
+  const lines = text.split("\n");
+  let start = lines.length;
+  for (let i = lines.length - 1; i >= 0; i--){ if (/^\s*\|.*/.test(lines[i])) start = i; else break; }
+  if (start < lines.length){
+    const block = lines.slice(start).join("\n");
+    const hasSep = /\|\s*:?-{1,}:?\s*(\||$)/.test(block);   // GFM 表格分隔列
+    if (!hasSep) return [lines.slice(0, start).join("\n"), block];
+  }
+  return [text, ""];
+}
+// 串流渲染：穩定段交給 md()，未成形尾段以淡墨純文字暫顯
+function renderStream(el, fullText){
+  const [stable, pending] = splitUnstableTail(stripCite(fullText));
+  let html = md(stable);
+  if (pending) html += `<span class="md-pending">${escapeHtml(pending)}</span>`;
+  el.innerHTML = html;
+}
 const icons = () => lucide.createIcons();
 
 /* —— 渲染 starter chips（空狀態） —— */
@@ -245,8 +296,8 @@ async function submit(text){
         let evt; try{ evt = JSON.parse(payload); }catch{ continue; }
         if(evt.type === "delta"){
           answerText += evt.text;
-          ui.answerEl.innerHTML = md(answerText);
-          scrollDown();
+          // 缺口③：以 requestAnimationFrame 合併同影格多個 delta，並用 renderStream 平滑渲染
+          if(!ui._raf){ ui._raf = requestAnimationFrame(()=>{ ui._raf = null; renderStream(ui.answerEl, answerText); scrollDown(); }); }
         } else if(evt.type === "final"){
           finalizeAnswer(ui, q, answerText, evt);
         }
@@ -264,13 +315,15 @@ async function submit(text){
 
 /* —— 串流結束：渲染來源、引證、chips、feedback —— */
 function finalizeAnswer(ui, question, answerText, evt){
+  if(ui._raf){ cancelAnimationFrame(ui._raf); ui._raf = null; }   // 取消未完成的串流影格
   ui.answerEl.classList.remove("stream-caret");
-  ui.answerEl.innerHTML = md(answerText);
+  ui.answerEl.innerHTML = md(answerText);   // final：整段穩定文字，完整渲染
   state.previousResponseId = evt.response_id || state.previousResponseId;
 
   // 彙整來源列（去重）
   const cites = evt.citations || [];
   state.lastEvidence = evt.evidence || [];
+  state.lastEvidenceMode = evt.evidence_mode || "retrieved";   // 缺口④：引用 vs 檢索參考
   if(cites.length){
     ui.sourcesEl.classList.remove("hidden");
     ui.sourcesEl.innerHTML =
@@ -339,9 +392,22 @@ function renderEvidence(activeFilename){
     ocBody.innerHTML = `<p class="font-body text-[14px] text-[var(--ink-50)] text-center py-8">尚無引證依據</p>`;
     return;
   }
-  ocBody.innerHTML = state.lastEvidence.map((e,i)=>{
+  // 缺口④：誠實標示這批依據是「答案實際引用」還是「檢索參考」
+  const modeLabel = state.lastEvidenceMode === "cited"
+    ? `<i data-lucide="link" class="icon-xs"></i> 答案引用來源`
+    : `<i data-lucide="search" class="icon-xs"></i> 檢索參考（未必逐句引用）`;
+  const header = `<div class="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-[var(--ink-50)] font-semibold mb-1">${modeLabel}</div>`;
+  ocBody.innerHTML = header + state.lastEvidence.map((e,i)=>{
     const active = e.filename===activeFilename ? " active" : "";
     const score = (e.score!=null) ? Number(e.score).toFixed(2) : "";
+    // 缺口⑥：有官方原文 url 就給真連結；無 url 才退回展開本地全文
+    const action = e.url
+      ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener noreferrer"
+            class="open-link mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
+           <i data-lucide="external-link" class="icon-xs"></i> 開啟官方原文</a>`
+      : `<button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
+           <i data-lucide="external-link" class="icon-xs"></i> 展開原文全文</button>
+         <div class="full-text legal-pre hidden font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>`;
     return `
       <div class="evi-card${active}" data-filename="${escapeHtml(e.filename||"")}" data-i="${i}">
         <div class="flex items-center gap-1.5 text-[12px] font-semibold">
@@ -349,10 +415,8 @@ function renderEvidence(activeFilename){
           <span class="text-[var(--blood)] flex-1 truncate">${escapeHtml(e.filename||"")}</span>
           <span class="text-[10px] text-[var(--ink-50)] font-normal">${score}</span>
         </div>
-        <div class="font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2">${escapeHtml(e.text||"")}</div>
-        <button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
-          <i data-lucide="external-link" class="icon-xs"></i> 開啟原文全文</button>
-        <div class="full-text hidden font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>
+        <div class="legal-pre font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2">${escapeHtml(e.text||"")}</div>
+        ${action}
       </div>`;
   }).join("");
   ocBody.querySelectorAll(".open-full").forEach(b=>
