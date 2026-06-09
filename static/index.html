@@ -24,8 +24,19 @@
     --shadow-lg:6px 0 30px #1a171426;
   }
   *{ box-sizing:border-box; }
-  html,body{ margin:0; height:100%; }
-  body{ background:var(--paper); color:var(--ink); font-family:'Public Sans',system-ui,sans-serif; }
+  /* 消除手機/平板橡皮筋：app shell 釘住視口、禁 overscroll、動態視口高度（dvh fallback 先寫舊值） */
+  html,body{
+    margin:0;
+    height:100%;        /* 舊瀏覽器 fallback */
+    height:100vh;       /* fallback */
+    height:100dvh;      /* 動態視口：處理手機瀏覽器工具列縮放 */
+    overflow:hidden;
+    overscroll-behavior:none;
+  }
+  body{
+    position:fixed; inset:0;   /* 釘住視口（iOS Safari 最穩） */
+    background:var(--paper); color:var(--ink); font-family:'Public Sans',system-ui,sans-serif;
+  }
   .font-display{ font-family:'Fraunces',serif; }
   .font-body{ font-family:'Spectral',serif; }
 
@@ -79,6 +90,11 @@
   .bar-btn{ transition:background .15s; } .bar-btn:hover{ background:#f5f2ea26; }
   .icon-sm{ width:15px; height:15px; } .icon-xs{ width:13px; height:13px; }
   ::-webkit-scrollbar{ width:9px; } ::-webkit-scrollbar-thumb{ background:var(--ink-20); border-radius:5px; }
+
+  /* —— 真正的捲動容器：阻斷捲動鏈傳到 body（消除橡皮筋）+ iOS 慣性順滑 —— */
+  main{ overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  /* offcanvas 內捲動區：抽屜捲動時不彈到底層 */
+  #oc-body{ overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
 </style>
 </head>
 <body class="flex flex-col h-full">
