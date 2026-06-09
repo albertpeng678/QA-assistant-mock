@@ -57,7 +57,23 @@ class Feedback(Base):
     )
 
 
+def _normalize_db_url(url):
+    """正規化 DB URL 的 driver，讓 Postgres 走 psycopg3。
+
+    Railway 注入的 DATABASE_URL 為 postgres:// 或 postgresql://，
+    SQLAlchemy 2.0 對裸 postgresql:// 預設用 psycopg2，但本專案裝的是
+    psycopg3（psycopg[binary]）。明確指定 +psycopg dialect 以相容。
+    sqlite 或已含 +driver 的 URL 維持不變。
+    """
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 def make_session_factory(url):
+    url = _normalize_db_url(url)
     engine = create_engine(url, future=True)
     Base.metadata.create_all(engine)
     return sessionmaker(engine, expire_on_commit=False)

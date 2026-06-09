@@ -1,4 +1,19 @@
-from app.db import Base, QueryLog, Feedback, make_session_factory
+from app.db import Base, QueryLog, Feedback, make_session_factory, _normalize_db_url
+
+
+def test_normalize_db_url():
+    # Railway 常見格式 postgres:// → postgresql+psycopg://
+    assert _normalize_db_url("postgres://user:pw@host:5432/db") == \
+        "postgresql+psycopg://user:pw@host:5432/db"
+    # postgresql://（無 +driver）→ postgresql+psycopg://
+    assert _normalize_db_url("postgresql://user:pw@host:5432/db") == \
+        "postgresql+psycopg://user:pw@host:5432/db"
+    # 已含 +psycopg 維持不變
+    assert _normalize_db_url("postgresql+psycopg://user:pw@host:5432/db") == \
+        "postgresql+psycopg://user:pw@host:5432/db"
+    # sqlite 維持不變
+    assert _normalize_db_url("sqlite+pysqlite:///:memory:") == \
+        "sqlite+pysqlite:///:memory:"
 
 
 def test_querylog_and_feedback_roundtrip():
