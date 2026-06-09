@@ -513,8 +513,183 @@ git commit -m "feat: Sentry 錯誤監控（缺口6）"
 
 ---
 
+## Task 11: Postgres 營運 log — DB 模組（query_logs + feedback）
+
+> 新增需求（產品營運可觀測性）。Railway Postgres 注入 `DATABASE_URL`。**可靠性鐵則：log 寫入失敗絕不可影響問答主流程。**
+
+**Files:**
+- Create: `app/db.py`（SQLAlchemy engine/session/models/init）
+- Modify: `requirements.txt`（加 `sqlalchemy>=2.0`、`psycopg[binary]`）
+- Test: `tests/test_db.py`（用 SQLite in-memory 覆寫，離線可跑）
+
+- [ ] **Step 1: 寫失敗測試**
+
+```python
+from app.db import Base, QueryLog, Feedback, make_session_factory
+
+def test_querylog_and_feedback_roundtrip():
+    Session = make_session_factory("sqlite+pysqlite:///:memory:")
+    with Session() as s:
+        log = QueryLog(question="個資外洩?", answer="應通知當事人。",
+                       citations=["個資法-第12條.txt"], evidence=[{"filename":"個資法-第12條.txt","score":0.91}],
+                       citation_count=1, has_answer=True, latency_ms=1200,
+                       input_tokens=10, output_tokens=20, total_tokens=30,
+                       model="gpt-4o-mini", response_id="resp_abc", previous_response_id=None, error=None)
+        s.add(log); s.commit()
+        fb = Feedback(query_log_id=log.id, rating="up")
+        s.add(fb); s.commit()
+        assert s.query(QueryLog).count() == 1
+        assert s.query(Feedback).first().rating == "up"
+```
+
+- [ ] **Step 2: 跑測試確認失敗**
+
+Run: `pip install "sqlalchemy>=2.0" "psycopg[binary]"` 後 `python -m pytest tests/test_db.py -v`
+Expected: FAIL（ImportError app.db）
+
+- [ ] **Step 3: 實作 app/db.py**
+
+```python
+from sqlalchemy import create_engine, String, Integer, Boolean, Text, DateTime, ForeignKey, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.types import JSON
+
+class Base(DeclarativeBase):
+    pass
+
+class QueryLog(Base):
+    __tablename__ = "query_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped["DateTime"] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text, default="")
+    citations: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    citation_count: Mapped[int] = mapped_column(Integer, default=0)
+    has_answer: Mapped[bool] = mapped_column(Boolean, default=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str] = mapped_column(String(64), default="")
+    response_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    previous_response_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+class Feedback(Base):
+    __tablename__ = "feedback"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    query_log_id: Mapped[int] = mapped_column(ForeignKey("query_logs.id"))
+    rating: Mapped[str] = mapped_column(String(8))  # "up" | "down"
+    created_at: Mapped["DateTime"] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+def make_session_factory(url):
+    engine = create_engine(url, future=True)
+    Base.metadata.create_all(engine)
+    return sessionmaker(engine, expire_on_commit=False)
+```
+
+- [ ] **Step 4: 跑測試確認綠**
+
+Run: `python -m pytest tests/test_db.py -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/db.py tests/test_db.py requirements.txt
+git commit -m "feat: Postgres 營運 log DB 模組（query_logs + feedback）"
+```
+
+---
+
+## Task 12: 問答 log 寫入整合（非阻斷）+ usage 擷取
+
+**Files:**
+- Modify: `app/rag.py`（`parse_response` 增 `usage`，`answer_question` 透傳）
+- Modify: `app/main.py`（`/api/ask` 量測 latency、寫 log，try/except 包覆）
+- Test: `tests/test_api.py`
+
+- [ ] **Step 1: 寫失敗測試（log 寫入失敗不可影響回應）**
+
+```python
+def test_ask_logs_but_failure_does_not_break_response(monkeypatch):
+    app.dependency_overrides[get_answerer] = lambda: _fake_answerer
+    # 故意讓 log 寫入丟例外
+    import app.main as m
+    monkeypatch.setattr(m, "log_query", lambda **kw: (_ for _ in ()).throw(RuntimeError("db down")))
+    client = TestClient(app)
+    r = client.post("/api/ask", json={"question": "個資外洩?"})
+    assert r.status_code == 200
+    assert r.json()["answer"] == "應通知當事人。"
+    app.dependency_overrides.clear()
+```
+
+- [ ] **Step 2: 跑確認失敗** — `python -m pytest tests/test_api.py -v -k logs` → FAIL（log_query 不存在）
+
+- [ ] **Step 3: 實作**
+  - `app/rag.py` `parse_response`：新增 `usage` 欄位 = `{input_tokens, output_tokens, total_tokens}`（取自 `getattr(response, "usage", None)`，無則 0），並加對應測試到 `tests/test_rag.py`。
+  - `app/main.py`：模組層初始化 session factory（`DATABASE_URL` 有才建，無則 None）；`log_query(**fields)` 函式寫一列 `QueryLog`；`/api/ask` 用 `time.perf_counter()` 量 latency、組欄位、**在 try/except 內**呼叫 `log_query`（失敗只 `logging.warning`/Sentry，不 raise）。
+
+- [ ] **Step 4: 跑確認綠** — `python -m pytest tests/test_api.py tests/test_rag.py -v`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/rag.py app/main.py tests/test_api.py tests/test_rag.py
+git commit -m "feat: /api/ask 非阻斷寫入營運 log + usage 擷取"
+```
+
+---
+
+## Task 13: /api/feedback 端點
+
+**Files:**
+- Modify: `app/main.py`
+- Test: `tests/test_api.py`
+
+- [ ] **Step 1: 寫失敗測試**
+
+```python
+def test_feedback_accepts_rating(monkeypatch):
+    import app.main as m
+    saved = {}
+    monkeypatch.setattr(m, "save_feedback", lambda query_log_id, rating: saved.update(id=query_log_id, r=rating))
+    client = TestClient(app)
+    r = client.post("/api/feedback", json={"query_log_id": 1, "rating": "up"})
+    assert r.status_code == 200
+    assert saved == {"id": 1, "r": "up"}
+```
+
+- [ ] **Step 2: 跑確認失敗**
+- [ ] **Step 3: 實作** `/api/feedback`（`FeedbackRequest{query_log_id:int, rating:Literal["up","down"]}` → `save_feedback` 寫 Feedback；DB 無則回 200 但記 warning）。`/api/ask` 回應需含 `query_log_id`（log 寫入後回傳 id；無 DB 時為 None）供前端回饋用。
+- [ ] **Step 4: 跑確認綠**
+- [ ] **Step 5: Commit** `feat: /api/feedback 使用者回饋端點`
+
+---
+
+## 部署補充（Railway Postgres）
+
+- [ ] `railway link`（選 QA-assistant-mock 專案；互動式，由使用者執行）
+- [ ] `railway add`（加 PostgreSQL plugin）→ Railway 自動注入 `DATABASE_URL` 到服務
+- [ ] App 啟動時若有 `DATABASE_URL` 則建表（`Base.metadata.create_all`）
+
+> 前端（Task 7）追加：每則答案下方加「讚/倒讚」icon（Lucide `thumbs-up`/`thumbs-down`，無 emoji），點擊 POST `/api/feedback` 帶該則 `query_log_id`。
+
+---
+
+## 三位 auditor 嚴格稽核（release gate）
+
+全部 Task 完成後，平行派 3 位 auditor，全數通過才可 merge/release：
+- **frontend auditor**：方向 A 設計合規（色系≤3、禁 emoji、左側 offcanvas、RWD）、a11y、與 API 契約一致、playwright 跨裝置結果。
+- **backend auditor**：rag/api 正確性、錯誤處理、log 非阻斷鐵則、無祕密入庫、測試品質。
+- **data/db auditor**：語料切檔正確性、檔名條號、ingest chunking、DB schema/索引、log 寫入與隱私（問答內容入庫的合理性）。
+
+---
+
 ## 收尾
 
-- [ ] `pytest -v` 全綠（含既有 + 新增單元 + API 測試）
+- [ ] `pytest -v` 全綠（含既有 + 新增單元 + API + DB 測試）
 - [ ] 對照 §9 成功標準逐項驗證
+- [ ] 三 auditor 全數通過
 - [ ] 用 `workshop/proposal-template.md` 吃 spec+plan → 生成 7 步提案
