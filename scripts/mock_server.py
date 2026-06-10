@@ -63,8 +63,33 @@ async def ask_stream(req: Request):
     # 測試鉤子：__FAILEMPTY__ 模擬 response.failed/無可見輸出——送出空 final + status=failed，
     # 用以驗收前端「不留空白泡泡、顯示誠實錯誤」。
     fail_empty = "__FAILEMPTY__" in question
+    # 測試鉤子：__MARKERS__ 模擬 gpt-5.4-mini 把依據欄純用 inline 引用標記表達——
+    # delta 串流帶 PUA 標記、但 final.answer 為後端轉好的腳註版，驗收前端「最終以 evt.answer 渲染、
+    # 依據欄不空、標記轉成可點腳註」。
+    markers = "__MARKERS__" in question
 
     def gen():
+        if markers:
+            CITE = "fileciteturn0file0"  # 模擬 OpenAI inline 引用標記
+            stream_text = (
+                "| 面向 | 依據 |\n|---|---|\n"
+                f"| 客戶身分確認 | {CITE} |\n"
+                f"| 交易監控 | {CITE} |\n"
+            )
+            for ch in [stream_text[i:i+10] for i in range(0, len(stream_text), 10)]:
+                yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
+                time.sleep(0.02)
+            final_answer = (
+                "| 面向 | 依據 |\n|---|---|\n"
+                "| 客戶身分確認 | [^1] |\n"
+                "| 交易監控 | [^1] |\n"
+            )
+            final = {"type": "final", "answer": final_answer, "citations": [EVIDENCE[0]["filename"]],
+                     "evidence": [EVIDENCE[0]], "evidence_mode": "cited",
+                     "response_id": "resp_mk", "query_log_id": 2}
+            yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
         if fail_empty:
             final = {"type": "final", "answer": "", "citations": [], "evidence": [],
                      "evidence_mode": "retrieved", "status": "failed", "truncated": False,

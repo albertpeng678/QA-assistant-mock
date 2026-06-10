@@ -351,7 +351,9 @@ function finalizeAnswer(ui, question, answerText, evt){
     return;
   }
 
-  ui.answerEl.innerHTML = md(answerText);   // final：整段穩定文字，完整渲染
+  // final：以後端 parse 後的權威答案渲染（已把 inline 引用標記轉成腳註 [^N]，依據欄不再空）；
+  // 僅在降級/無 final 時才退回串流累積的原文。
+  ui.answerEl.innerHTML = md(evt.answer != null ? evt.answer : answerText);
 
   // 誠實提示：回答被截斷（撞長度上限）或連線中斷導致不完整——法遵工具不可讓人誤以為是完整答案。
   if(evt.truncated || evt.partial){

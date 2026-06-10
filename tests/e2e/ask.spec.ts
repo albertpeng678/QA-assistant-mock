@@ -143,6 +143,22 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(page.locator(".src-row")).toHaveCount(0);
   });
 
+  test("依據欄用 inline 引用標記時，最終以後端腳註渲染、欄位不空且可點（截斷欄根因）", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#q").fill("__MARKERS__ 高風險客戶要加強哪些面向");
+    await page.locator("#ask-form button[type=submit]").click();
+
+    const answer = page.locator("[data-answer]");
+    await expect(answer.locator("table")).toBeVisible();
+    // 依據欄轉成可點腳註上標（非空白）
+    await expect(answer.locator("sup a.cite-ref")).toHaveCount(2);
+    // 不可殘留原始 PUA 引用標記或 turnXfileY 文字
+    await expect(answer).not.toContainText("filecite");
+    await expect(answer).not.toContainText("turn0file");
+    // 來源列有出現（cited）
+    await expect(page.locator(".src-row")).toHaveCount(1);
+  });
+
   test("跨裝置（手機）問答流程 @mobile", async ({ page }) => {
     // chromium-mobile project 已用 Pixel 5；此處再明確設一個窄 viewport 作雙保險。
     await page.setViewportSize({ width: 390, height: 780 });

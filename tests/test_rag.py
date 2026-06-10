@@ -340,6 +340,80 @@ def test_astream_answer_skips_reasoning_deltas():
     assert events[-1]["type"] == "final"
 
 
+# ---- (J) inline 引用標記 → 腳註（修「依據欄空白」根因）----
+# gpt-5.4-mini 把來源以 inline 引用標記塞進答案（PUA U+E200…filecite U+E202 turnNfileM U+E201），
+# annotations 常空。原 _strip_citation_markers 把這些整段刪除 → 當模型把「依據」欄純用標記表達時整欄變空。
+# 正解：把標記轉成可對映來源的腳註 [^k]（k 對到 file_search_call.results[M]），依據欄不再空。
+def _resp_with_marker_citations():
+    # 兩列表格，依據欄各只用 inline 標記（模擬截圖的「整欄空白」極端情形）
+    text = (
+        "| 面向 | 依據 |\n|---|---|\n"
+        "| 客戶身分確認 | fileciteturn0file0 |\n"
+        "| PEPs | fileciteturn0file1 fileciteturn0file0 |\n"
+    )
+    content = SimpleNamespace(text=text, annotations=[])  # annotations 空（gpt-5.4-mini 實況）
+    message = SimpleNamespace(type="message", content=[content])
+    rA = SimpleNamespace(file_id="fA", filename="洗錢防制法-第7條.txt", text="第7條…", score=0.78)
+    rB = SimpleNamespace(file_id="fB", filename="洗錢防制-FAQ-PEPs.txt", text="PEPs…", score=0.77)
+    fs = SimpleNamespace(type="file_search_call", content=None, results=[rA, rB])
+    return SimpleNamespace(output=[fs, message], id="resp_mk")
+
+
+def test_parse_response_converts_markers_to_footnotes():
+    result = parse_response(_resp_with_marker_citations())
+    ans = result["answer"]
+    # 標記被轉成腳註、依據欄不空
+    assert "[^1]" in ans and "[^2]" in ans
+    # 不殘留 PUA 字元或 turnXfileY token
+    assert not any("" <= ch <= "" for ch in ans)
+    assert "turn0file" not in ans
+
+
+def test_parse_response_marker_footnotes_map_to_cited_evidence():
+    result = parse_response(_resp_with_marker_citations())
+    # 腳註順序 = 首次被引用順序：file0(洗錢防制法第7條)=^1、file1(PEPs FAQ)=^2
+    assert result["evidence_mode"] == "cited"
+    assert result["citations"] == ["洗錢防制法-第7條.txt", "洗錢防制-FAQ-PEPs.txt"]
+    assert [e["filename"] for e in result["evidence"]] == ["洗錢防制法-第7條.txt", "洗錢防制-FAQ-PEPs.txt"]
+
+
+def test_parse_response_marker_dedupes_same_file_to_same_footnote():
+    # 同一檔被多列引用 → 同一腳註編號（PEPs 列也引用 file0，應仍是 ^1）
+    result = parse_response(_resp_with_marker_citations())
+    # file0 出現在第1列與第2列，都應是 [^1]；citations 不重複
+    assert result["answer"].count("[^1]") == 2
+    assert result["citations"].count("洗錢防制法-第7條.txt") == 1
+
+
+def test_parse_response_footnotes_follow_reading_order():
+    # 混用純文字 token（在前）與 PUA span（在後）時，腳註編號須依「閱讀順序」遞增，
+    # 否則上標會顯示成 ²…¹（雖不誤標，但視覺錯亂）。
+    # bare(file0) 在前、完整 PUA span(file1) 在後——兩者分屬不同 pass，正是會亂序的組合。
+    span = chr(0xE200) + "filecite" + chr(0xE202) + "turn0file1" + chr(0xE201)
+    text = "前段fileciteturn0file0，後段" + span + "。"
+    content = SimpleNamespace(text=text, annotations=[])
+    message = SimpleNamespace(type="message", content=[content])
+    r0 = SimpleNamespace(file_id="f0", filename="甲檔.txt", text="甲", score=0.9)
+    r1 = SimpleNamespace(file_id="f1", filename="乙檔.txt", text="乙", score=0.8)
+    fs = SimpleNamespace(type="file_search_call", content=None, results=[r0, r1])
+    result = parse_response(SimpleNamespace(output=[fs, message]))
+    # 先出現的 file0 應為 [^1]、後出現的 file1 應為 [^2]，且 [^1] 在 [^2] 之前
+    assert result["answer"].index("[^1]") < result["answer"].index("[^2]")
+    assert result["citations"] == ["甲檔.txt", "乙檔.txt"]
+
+
+def test_parse_response_out_of_range_marker_dropped_safely():
+    # turnNfileM 的 M 超出 results 範圍 → 安全移除，不產生錯誤腳註、不 crash（避免張冠李戴）
+    text = "結論。fileciteturn0file9"
+    content = SimpleNamespace(text=text, annotations=[])
+    message = SimpleNamespace(type="message", content=[content])
+    r0 = SimpleNamespace(file_id="f0", filename="只有這一檔.txt", text="…", score=0.9)
+    fs = SimpleNamespace(type="file_search_call", content=None, results=[r0])
+    result = parse_response(SimpleNamespace(output=[fs, message]))
+    assert result["answer"] == "結論。"
+    assert "[^" not in result["answer"]
+
+
 # ---- (H) 串流終結事件：incomplete/failed 也要發出 final ----
 # 根因：推理模型 gpt-5.4-mini 撞 max_output_tokens 時，Responses API 以 status="incomplete"
 # 結束、終結串流事件為 response.incomplete（非 completed）。原碼只認 completed → 永不發 final

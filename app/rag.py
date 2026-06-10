@@ -117,6 +117,61 @@ def _dedupe_evidence(entries):
     return out
 
 
+# 單一交替式：完整 PUA span 在前（於 U+E200 位置先吃整段），純文字 token 在後。
+# 一次左到右掃描 → 腳註編號依閱讀順序（避免 span/bare 分兩 pass 造成亂序）。
+_CITE_MARKER_RE = re.compile(".*?" r"|(?:filecite)?turn\d+file(\d+)", re.DOTALL)
+
+
+def _linkify_citation_markers(text, raw_results):
+    """把 inline 引用標記轉成可對映來源的腳註 [^k]，回 (新文字, 依首次引用序的檔名清單)。
+
+    gpt-5.4-mini 以 inline 標記（PUA U+E200…filecite U+E202 turnNfileM U+E201，或純文字
+    fileciteturnNfileM）表達來源；M 為 file_search_call.results 的索引。原本整段刪除會讓
+    「依據」欄變空——改為轉腳註，並讓腳註編號對齊實際被引用的來源（與證據面板一致）。
+    超出範圍的 M 安全丟棄（不產生錯誤腳註，避免張冠李戴）。
+    """
+    order = []
+    num = {}
+
+    def footnote_for(m):
+        if not (0 <= m < len(raw_results)):
+            return None
+        fn = raw_results[m].get("filename")
+        if not fn:
+            return None
+        if fn not in num:
+            order.append(fn)
+            num[fn] = len(order)
+        return num[fn]
+
+    def repl(match):
+        # group(0) 可能是整段 PUA span 或純文字 token；兩者都能從中找出 turnNfileM。
+        mm = re.search(r"turn\d+file(\d+)", match.group(0))
+        if mm:
+            n = footnote_for(int(mm.group(1)))
+            if n:
+                return f"[^{n}]"
+        return ""
+
+    text = _CITE_MARKER_RE.sub(repl, text)       # 單一 pass，依閱讀順序編號
+    text = _PUA_CITATION_RE.sub("", text)        # 殘缺/孤兒 PUA 字元清理
+    return text, order
+
+
+def _evidence_for_files(filenames, all_results):
+    """依給定檔名順序，從 all_results 取每檔分數最高的 chunk 組出 evidence（移除內部鍵）。"""
+    out = []
+    for fn in filenames:
+        cands = [e for e in all_results if e["filename"] == fn]
+        if not cands:
+            continue
+        best = max(cands, key=lambda e: e.get("score") or 0)
+        e = dict(best)
+        e.pop("_file_id", None)
+        out.append(e)
+    return out
+
+
 def parse_response(response):
     """把 Responses API 回應解析為
     {"answer", "citations", "evidence", "evidence_mode", "response_id", "usage"}。
@@ -165,14 +220,26 @@ def parse_response(response):
                 entry["url"] = url
             all_results.append(entry)
 
-    # evidence：有 annotations 就只留被引用檔（cited，精準）；否則退回 retrieved，
-    # 依分數取 top-N（避免把全部檢索段落都倒給使用者），並讓來源列與顯示一致。
-    if cited_ids:
+    # 答案文字的 inline 引用標記 → 腳註（修「依據欄空白」根因）。gpt-5.4-mini annotations 常空，
+    # 來源資訊只在這些標記裡；轉腳註後依據欄不再空，且編號對齊被引用來源。
+    joined_answer = "".join(answer_parts)
+    linked_answer, marker_files = _linkify_citation_markers(joined_answer, all_results)
+
+    # evidence 三路：① 答案內 inline 標記（gpt-5.4-mini 實況，最精準）；② annotations；
+    # ③ 皆無 → 退回 retrieved top-N（依分數）。前兩者為 cited，來源列與腳註一致。
+    if marker_files:
+        answer_text = linked_answer
+        evidence = _evidence_for_files(marker_files, all_results)
+        citations = marker_files
+        evidence_mode = "cited"
+    elif cited_ids:
+        answer_text = _strip_citation_markers(joined_answer)
         kept = [e for e in all_results
                 if e["filename"] in cited_ids or e["_file_id"] in cited_ids]
         evidence = _dedupe_evidence(kept)
         evidence_mode = "cited"
     else:
+        answer_text = _strip_citation_markers(joined_answer)
         deduped = _dedupe_evidence(all_results)
         deduped.sort(key=lambda e: (e.get("score") or 0), reverse=True)
         evidence = deduped[:EVIDENCE_DISPLAY_LIMIT]
@@ -192,7 +259,7 @@ def parse_response(response):
     incomplete = getattr(response, "incomplete_details", None)
     incomplete_reason = getattr(incomplete, "reason", None) if incomplete else None
     return {
-        "answer": _strip_citation_markers("".join(answer_parts)),
+        "answer": answer_text,
         "citations": citations,
         "evidence": evidence,
         "evidence_mode": evidence_mode,
