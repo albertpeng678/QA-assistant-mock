@@ -136,7 +136,7 @@ def test_answer_question_applies_reasoning_model_params():
     call = client.responses.calls[0]
     assert call["reasoning"] == {"effort": "low"}
     assert call["text"]["verbosity"] == "medium"
-    assert call["max_output_tokens"] == 2048
+    assert call["max_output_tokens"] == 4096  # 推理模型需更多輸出預算，避免 incomplete 截斷
     assert call["instructions"] == ANSWER_INSTRUCTIONS
     # 推理模型不可帶 temperature/top_p
     assert "temperature" not in call
@@ -338,6 +338,111 @@ def test_astream_answer_skips_reasoning_deltas():
     deltas = [e for e in events if e["type"] == "delta"]
     assert deltas == [{"type": "delta", "text": "正式答案"}]
     assert events[-1]["type"] == "final"
+
+
+# ---- (H) 串流終結事件：incomplete/failed 也要發出 final ----
+# 根因：推理模型 gpt-5.4-mini 撞 max_output_tokens 時，Responses API 以 status="incomplete"
+# 結束、終結串流事件為 response.incomplete（非 completed）。原碼只認 completed → 永不發 final
+# → 答案截斷且無 citations/evidence/followups。下列測試鎖死「截斷時仍須發出 final」。
+def _fake_incomplete_response():
+    ann = SimpleNamespace(type="file_citation", file_id="file-A", filename="個資法-第12條.txt")
+    content = SimpleNamespace(text="部分答案被截斷", annotations=[ann])
+    message = SimpleNamespace(type="message", content=[content])
+    r = SimpleNamespace(file_id="file-A", filename="個資法-第12條.txt", text="A段", score=0.9)
+    fs = SimpleNamespace(type="file_search_call", content=None, results=[r])
+    return SimpleNamespace(
+        output=[fs, message], id="resp_inc",
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2048, total_tokens=2053),
+    )
+
+
+def test_parse_response_flags_truncated_on_incomplete():
+    result = parse_response(_fake_incomplete_response())
+    assert result["status"] == "incomplete"
+    assert result["truncated"] is True
+    # 截斷時仍須能取出已生成的 citations/evidence（供前端誠實顯示）
+    assert result["citations"] == ["個資法-第12條.txt"]
+
+
+def test_parse_response_not_truncated_on_normal():
+    result = parse_response(_fake_response_with_results())
+    assert result["truncated"] is False
+    assert result["status"] in (None, "completed")
+
+
+def test_parse_response_surfaces_incomplete_reason():
+    # telemetry：截斷原因（多為 max_output_tokens）須帶出，供 server 端記錄。
+    result = parse_response(_fake_incomplete_response())
+    assert result["incomplete_reason"] == "max_output_tokens"
+
+
+def _fake_failed_response():
+    # response.failed 常見無 message 輸出（空 output）。
+    return SimpleNamespace(output=[], id="resp_fail", status="failed")
+
+
+def test_parse_response_status_failed_not_truncated():
+    result = parse_response(_fake_failed_response())
+    assert result["status"] == "failed"
+    assert result["truncated"] is False
+    assert result["answer"] == ""
+
+
+def test_stream_answer_emits_final_on_failed():
+    # response.failed 也是終結事件（帶 .response）：須發出 final 讓前端能誠實收尾，
+    # 不可讓串流靜默結束、前端永遠卡住。
+    failed = SimpleNamespace(type="response.failed", response=_fake_failed_response())
+    client = _FakeClient([failed])
+
+    events = list(stream_answer(client, "q", vector_store_id="vs_1", model="gpt-5.4-mini"))
+
+    assert events[-1]["type"] == "final"
+    assert events[-1]["status"] == "failed"
+
+
+def test_stream_answer_emits_final_on_incomplete():
+    delta = SimpleNamespace(type="response.output_text.delta", delta="部分答案")
+    incomplete = SimpleNamespace(type="response.incomplete", response=_fake_incomplete_response())
+    client = _FakeClient([delta, incomplete])
+
+    events = list(stream_answer(client, "q", vector_store_id="vs_1", model="gpt-5.4-mini"))
+
+    assert events[0] == {"type": "delta", "text": "部分答案"}
+    final = events[-1]
+    assert final["type"] == "final"
+    assert final["citations"] == ["個資法-第12條.txt"]
+    assert final["truncated"] is True
+
+
+def test_astream_answer_emits_final_on_incomplete():
+    delta = SimpleNamespace(type="response.output_text.delta", delta="部分答案")
+    incomplete = SimpleNamespace(type="response.incomplete", response=_fake_incomplete_response())
+    client = _FakeAsyncClient([delta, incomplete])
+
+    events = _drain_async(
+        astream_answer(client, "q", vector_store_id="vs_1", model="gpt-5.4-mini")
+    )
+
+    final = events[-1]
+    assert final["type"] == "final"
+    assert final["truncated"] is True
+    assert final["citations"] == ["個資法-第12條.txt"]
+
+
+def test_suggest_followups_graceful_on_bad_output():
+    # output_text 非合法 JSON（模型故障/截斷）時，不可拋例外，須優雅回空清單。
+    class _BadResponses:
+        def create(self, **kwargs):
+            return SimpleNamespace(output_text="not-json{")
+
+    class _BadClient:
+        def __init__(self):
+            self.responses = _BadResponses()
+
+    out = suggest_followups(_BadClient(), "q", "a", model="gpt-5.4-mini")
+    assert out == {"questions": []}
 
 
 # ---- (G) 缺口②/⑦：新 ANSWER_INSTRUCTIONS 涵蓋表格 + 確定性層級 + 誠實兜底 ----

@@ -114,6 +114,35 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(up).toHaveClass(/active/);
   });
 
+  test("串流未收到 final 時仍降級顯示答案 + 誠實提示（截斷根因防護）", async ({ page }) => {
+    await page.goto("/");
+    // __NOFINAL__ 讓 mock 只送 delta + [DONE]、不送 final（模擬截斷/連線中斷）
+    await page.locator("#q").fill("__NOFINAL__ 個資外洩要通報誰？");
+    await page.locator("#ask-form button[type=submit]").click();
+
+    const answer = page.locator("[data-answer]");
+    await expect(answer).toBeVisible();
+    // 降級兜底：答案文字仍完整渲染（不再卡在串流截斷狀態），且表格成形
+    await expect(answer).toContainText("通知當事人");
+    await expect(answer.locator("table")).toBeVisible();
+    await expect(answer.locator(".md-pending")).toHaveCount(0);
+    // 誠實提示「連線中斷 / 可能不完整」
+    await expect(answer.locator("xpath=following-sibling::p")).toContainText("不完整");
+    // 追問建議獨立於 final，仍應載入
+    await expect(page.locator(".chip.followup").first()).toBeVisible();
+  });
+
+  test("終結但無內容（failed）時顯示誠實錯誤、不留空白泡泡", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#q").fill("__FAILEMPTY__ 個資外洩");
+    await page.locator("#ask-form button[type=submit]").click();
+
+    const answer = page.locator("[data-answer]");
+    await expect(answer).toContainText("發生錯誤");
+    // 不留空白、不誤渲染來源
+    await expect(page.locator(".src-row")).toHaveCount(0);
+  });
+
   test("跨裝置（手機）問答流程 @mobile", async ({ page }) => {
     // chromium-mobile project 已用 Pixel 5；此處再明確設一個窄 viewport 作雙保險。
     await page.setViewportSize({ width: 390, height: 780 });

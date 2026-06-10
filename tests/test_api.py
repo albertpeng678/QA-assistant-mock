@@ -120,6 +120,19 @@ def test_suggest_returns_questions(monkeypatch):
     assert resp.json() == {"questions": ["Q1", "Q2", "Q3"]}
 
 
+def test_suggest_graceful_when_followups_raise(monkeypatch):
+    # 追問建議是獨立於主問答的呼叫；其失敗不可變成 500，須優雅降級為空清單。
+    monkeypatch.setattr(main, "OpenAI", lambda **kw: object())
+
+    def boom(client_, q, a, **kw):
+        raise RuntimeError("OpenAI down")
+
+    monkeypatch.setattr(main, "suggest_followups", boom)
+    resp = client.post("/api/suggest", json={"question": "問", "answer": "答"})
+    assert resp.status_code == 200
+    assert resp.json() == {"questions": []}
+
+
 # ---------- /api/source/{filename} ----------
 
 def test_source_endpoint_rejects_path_traversal():

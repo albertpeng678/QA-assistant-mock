@@ -55,11 +55,29 @@ ANSWER_INSTRUCTIONS = (
 )
 
 # gpt-5.4-mini 為推理模型：用 reasoning/text.verbosity，不可傳 temperature/top_p。
+# max_output_tokens 同時涵蓋「可見輸出 + 推理 token」（OpenAI Responses API 定義）；
+# 推理模型若預算太小，會在答案中途以 status="incomplete" 截斷，故給足輸出預算。
 _MODEL_PARAMS = {
     "reasoning": {"effort": "low"},
     "text": {"verbosity": "medium"},
-    "max_output_tokens": 2048,
+    "max_output_tokens": 4096,
 }
+
+# 串流終結事件型別：Responses API 除了正常完成的 response.completed，還可能以
+# response.incomplete（撞 max_output_tokens 等）或 response.failed 結束——三者都帶 .response。
+# 原本只認 completed，導致 incomplete 截斷時永不發 final（無 citations/evidence/followups）。
+_TERMINAL_EVENT_TYPES = ("response.completed", "response.incomplete", "response.failed")
+
+
+def _terminal_response(event, event_type):
+    """若 event 為串流終結事件，回傳其攜帶的 response 物件；否則回 None。
+
+    用精確比對（非 substring）：事件型別字串已正規化，精確比對同樣容錯，
+    且不會被未來新增的事件名稱誤判為終結。
+    """
+    if event_type in _TERMINAL_EVENT_TYPES:
+        return getattr(event, "response", None)
+    return None
 
 
 # retrieved（無 annotations）模式下，最多顯示幾則檢索依據（依分數）。
@@ -168,6 +186,11 @@ def parse_response(response):
         "output_tokens": getattr(usage_obj, "output_tokens", 0) or 0,
         "total_tokens": getattr(usage_obj, "total_tokens", 0) or 0,
     }
+    # status="incomplete" 代表答案被截斷（多為撞 max_output_tokens）；誠實標示供前端提示，
+    # 法遵工具不可讓使用者誤以為看到的是完整回答。incomplete_reason 供 server 端 telemetry。
+    status = getattr(response, "status", None)
+    incomplete = getattr(response, "incomplete_details", None)
+    incomplete_reason = getattr(incomplete, "reason", None) if incomplete else None
     return {
         "answer": _strip_citation_markers("".join(answer_parts)),
         "citations": citations,
@@ -175,6 +198,9 @@ def parse_response(response):
         "evidence_mode": evidence_mode,
         "response_id": getattr(response, "id", None),
         "usage": usage,
+        "status": status,
+        "truncated": status == "incomplete",
+        "incomplete_reason": incomplete_reason,
     }
 
 
@@ -214,8 +240,9 @@ def stream_answer(client, question, *, vector_store_id, model, previous_response
     final_response = None
     for event in client.responses.create(**kwargs):
         event_type = getattr(event, "type", None) or ""
-        if "response.completed" in event_type and getattr(event, "response", None) is not None:
-            final_response = event.response
+        terminal = _terminal_response(event, event_type)
+        if terminal is not None:
+            final_response = terminal
             continue
         # 只接受答案文字增量事件（output_text.delta）；推理模型的 reasoning/function_call
         # delta 事件雖也帶 .delta 屬性，但屬思考鏈，不可洩漏進答案串流。
@@ -239,8 +266,9 @@ async def astream_answer(client, question, *, vector_store_id, model, previous_r
     stream = await client.responses.create(**kwargs)
     async for event in stream:
         event_type = getattr(event, "type", None) or ""
-        if "response.completed" in event_type and getattr(event, "response", None) is not None:
-            final_response = event.response
+        terminal = _terminal_response(event, event_type)
+        if terminal is not None:
+            final_response = terminal
             continue
         delta = getattr(event, "delta", None)
         if event_type.endswith("output_text.delta") and isinstance(delta, str):
@@ -269,4 +297,11 @@ def suggest_followups(client, question, answer, *, model):
         f"問題：{question}\n回答：{answer}"
     )
     response = client.responses.create(model=model, input=prompt, text={"format": _FOLLOWUP_SCHEMA})
-    return json.loads(response.output_text)
+    # 模型故障/截斷可能讓 output_text 缺失或非合法 JSON；追問建議屬輔助功能，不可因此拋例外。
+    try:
+        data = json.loads(getattr(response, "output_text", "") or "")
+    except (json.JSONDecodeError, TypeError):
+        return {"questions": []}
+    if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
+        return {"questions": []}
+    return data

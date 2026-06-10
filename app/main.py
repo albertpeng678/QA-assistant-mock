@@ -197,6 +197,12 @@ async def ask_stream(req: AskRequest):
             previous_response_id=req.previous_response_id,
         ):
             if item.get("type") == "final":
+                if item.get("truncated"):
+                    # 截斷為 field-reported bug 的根因；記錄供 production 確認原因（多為 max_output_tokens）
+                    logger.warning(
+                        "回答被截斷 status=%s reason=%s response_id=%s",
+                        item.get("status"), item.get("incomplete_reason"), item.get("response_id"),
+                    )
                 latency_ms = int((time.perf_counter() - start) * 1000)
                 fields = _build_log_fields(
                     req.question, item, latency_ms, req.previous_response_id
@@ -212,8 +218,15 @@ async def ask_stream(req: AskRequest):
 # ---------- /api/suggest ----------
 @app.post("/api/suggest")
 def suggest(req: SuggestRequest):
-    client = OpenAI(api_key=config.OPENAI_API_KEY)
-    return suggest_followups(client, req.question, req.answer, model=config.OPENAI_MODEL)
+    # 追問建議是獨立於主問答的輔助呼叫，其失敗不可變成 500 拖垮前端體驗：
+    # 比照 log_query 的非阻斷鐵則，失敗只 warning + Sentry capture，優雅降級為空清單。
+    try:
+        client = OpenAI(api_key=config.OPENAI_API_KEY)
+        return suggest_followups(client, req.question, req.answer, model=config.OPENAI_MODEL)
+    except Exception as exc:  # noqa: BLE001 - 輔助功能不可拖垮主流程
+        logger.warning("suggest_followups 失敗（不影響答案）：%s", exc)
+        _capture(exc)
+        return {"questions": []}
 
 
 # ---------- /api/source/{filename} ----------

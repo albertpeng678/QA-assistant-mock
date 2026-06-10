@@ -55,14 +55,31 @@ def health():
 
 @app.post("/api/ask/stream")
 async def ask_stream(req: Request):
+    body = await req.json()
+    question = (body or {}).get("question", "") or ""
+    # 測試鉤子：問題含 __NOFINAL__ 時只送 delta + [DONE]、不送 final，
+    # 模擬後端截斷/連線中斷，用以驗收前端的「降級兜底 finalize」。
+    no_final = "__NOFINAL__" in question
+    # 測試鉤子：__FAILEMPTY__ 模擬 response.failed/無可見輸出——送出空 final + status=failed，
+    # 用以驗收前端「不留空白泡泡、顯示誠實錯誤」。
+    fail_empty = "__FAILEMPTY__" in question
+
     def gen():
+        if fail_empty:
+            final = {"type": "final", "answer": "", "citations": [], "evidence": [],
+                     "evidence_mode": "retrieved", "status": "failed", "truncated": False,
+                     "response_id": "resp_fail", "query_log_id": None}
+            yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
         for ch in [ANSWER[i:i+12] for i in range(0, len(ANSWER), 12)]:
             yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
             time.sleep(0.04)
-        final = {"type": "final", "answer": ANSWER, "citations": CITES,
-                 "evidence": EVIDENCE, "evidence_mode": "cited",
-                 "response_id": "resp_mock", "query_log_id": 1}
-        yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
+        if not no_final:
+            final = {"type": "final", "answer": ANSWER, "citations": CITES,
+                     "evidence": EVIDENCE, "evidence_mode": "cited",
+                     "response_id": "resp_mock", "query_log_id": 1}
+            yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
         yield "data: [DONE]\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
 

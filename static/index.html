@@ -272,6 +272,24 @@ async function submit(text){
   addQuestion(q);
   const ui = addAnswer();
   let answerText = "";
+  let gotFinal = false;
+
+  // 處理單一 SSE frame（抽出成函式，讓串流結束後也能 flush buf 殘段）
+  const handleFrame = (frame) => {
+    const line = frame.split("\n").find(l=> l.startsWith("data:"));
+    if(!line) return;
+    const payload = line.slice(5).trim();
+    if(!payload || payload === "[DONE]") return;
+    let evt; try{ evt = JSON.parse(payload); }catch(e){ console.warn("SSE JSON 解析失敗，跳過此 frame：", e, payload); return; }
+    if(evt.type === "delta"){
+      answerText += evt.text;
+      // 缺口③：以 requestAnimationFrame 合併同影格多個 delta，並用 renderStream 平滑渲染
+      if(!ui._raf){ ui._raf = requestAnimationFrame(()=>{ ui._raf = null; renderStream(ui.answerEl, answerText); scrollDown(); }); }
+    } else if(evt.type === "final"){
+      gotFinal = true;
+      finalizeAnswer(ui, q, answerText, evt);
+    }
+  };
 
   try{
     const resp = await fetch("/api/ask/stream", {
@@ -288,25 +306,26 @@ async function submit(text){
       if(done) break;
       buf += decoder.decode(value, { stream:true });
       const frames = buf.split(/\r?\n\r?\n/); buf = frames.pop();
-      for(const frame of frames){
-        const line = frame.split("\n").find(l=> l.startsWith("data:"));
-        if(!line) continue;
-        const payload = line.slice(5).trim();
-        if(payload === "[DONE]") continue;
-        let evt; try{ evt = JSON.parse(payload); }catch{ continue; }
-        if(evt.type === "delta"){
-          answerText += evt.text;
-          // 缺口③：以 requestAnimationFrame 合併同影格多個 delta，並用 renderStream 平滑渲染
-          if(!ui._raf){ ui._raf = requestAnimationFrame(()=>{ ui._raf = null; renderStream(ui.answerEl, answerText); scrollDown(); }); }
-        } else if(evt.type === "final"){
-          finalizeAnswer(ui, q, answerText, evt);
-        }
+      for(const frame of frames) handleFrame(frame);
+    }
+    // 收尾：flush 殘留在 buf 的最後一個 frame（尾端無分隔符時不致遺失）
+    if(buf.trim()) handleFrame(buf);
+    // 降級兜底：串流結束卻從未收到 final（後端未送/連線中斷）。
+    //   有累積文字 → 用既有文字完成渲染（含追問建議），並標 partial 誠實提示；
+    //   完全沒文字 → 視為錯誤，交給 catch 顯示錯誤訊息。
+    if(!gotFinal){
+      if(answerText.trim()){
+        finalizeAnswer(ui, q, answerText, { partial:true, citations:[], evidence:[] });
+      }else{
+        throw new Error("串流結束但無任何內容");
       }
     }
   }catch(err){
-    ui.answerEl.classList.remove("stream-caret");
-    ui.answerEl.innerHTML = `<p class="text-[var(--blood)] flex items-center gap-1.5"><i data-lucide="alert-circle" class="icon-sm"></i> 抱歉，發生錯誤，請稍後再試。</p>`;
-    icons();
+    if(!gotFinal){
+      ui.answerEl.classList.remove("stream-caret");
+      ui.answerEl.innerHTML = `<p class="text-[var(--blood)] flex items-center gap-1.5"><i data-lucide="alert-circle" class="icon-sm"></i> 抱歉，發生錯誤，請稍後再試。</p>`;
+      icons();
+    }
   }finally{
     state.answering = false; document.getElementById("send").disabled = false;
     ui.answerEl.classList.remove("stream-caret");
@@ -317,8 +336,33 @@ async function submit(text){
 function finalizeAnswer(ui, question, answerText, evt){
   if(ui._raf){ cancelAnimationFrame(ui._raf); ui._raf = null; }   // 取消未完成的串流影格
   ui.answerEl.classList.remove("stream-caret");
-  ui.answerEl.innerHTML = md(answerText);   // final：整段穩定文字，完整渲染
   state.previousResponseId = evt.response_id || state.previousResponseId;
+
+  // 終結但無可見內容（response.failed，或推理耗盡預算未產出答案）：誠實顯示錯誤/截斷訊息，
+  // 絕不留空白泡泡讓使用者誤以為「沒問題只是沒答」。此時不渲染來源/追問/feedback。
+  const hasText = (answerText || "").trim().length > 0;
+  if(evt.status === "failed" || !hasText){
+    const msg = (evt.status === "failed")
+      ? "回答過程發生錯誤，請重新提問。"
+      : (evt.truncated ? "回答因長度上限被截斷、未能產出內容，請縮小問題範圍後重試。"
+                       : "抱歉，未能產生回答，請重新提問。");
+    ui.answerEl.innerHTML = `<p class="text-[var(--blood)] flex items-center gap-1.5"><i data-lucide="alert-circle" class="icon-sm"></i> ${msg}</p>`;
+    icons();
+    return;
+  }
+
+  ui.answerEl.innerHTML = md(answerText);   // final：整段穩定文字，完整渲染
+
+  // 誠實提示：回答被截斷（撞長度上限）或連線中斷導致不完整——法遵工具不可讓人誤以為是完整答案。
+  if(evt.truncated || evt.partial){
+    const notice = document.createElement("p");
+    notice.className = "flex items-center gap-1.5 text-[12px] mt-1";
+    notice.style.color = "var(--blood)";
+    notice.innerHTML = `<i data-lucide="alert-triangle" class="icon-xs"></i> ` +
+      (evt.partial ? "連線中斷，以上回答可能不完整，建議重新提問。"
+                   : "回答因長度上限被截斷，建議縮小問題範圍或分次提問，並務必核對條文原文。");
+    ui.answerEl.after(notice);
+  }
 
   // 彙整來源列（去重）
   const cites = evt.citations || [];
