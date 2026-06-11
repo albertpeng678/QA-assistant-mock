@@ -42,7 +42,11 @@ def test_answer_question_calls_file_search_with_vector_store():
     call = client.responses.calls[0]
     assert call["model"] == "gpt-4o-mini"
     assert call["input"] == "加班費怎麼算?"
-    assert call["tools"] == [{"type": "file_search", "vector_store_ids": ["vs_123"]}]
+    assert call["tools"] == [{
+        "type": "file_search",
+        "vector_store_ids": ["vs_123"],
+        "ranking_options": {"score_threshold": 0.5},
+    }]
 
 def _fake_response_with_results():
     annotation = SimpleNamespace(filename="個資法-第12條.txt")
@@ -444,6 +448,76 @@ def test_parse_response_not_truncated_on_normal():
     result = parse_response(_fake_response_with_results())
     assert result["truncated"] is False
     assert result["status"] in (None, "completed")
+
+
+# ---- (I) 檢索分流：判決保障名額（方向1，解決判決結構性弱勢）----
+# 判決語意密度天生輸法條（長論述 vs 單條法規，實測差~12%），單路檢索 top-20 會被高分法條
+# 擠光（實測判決 0 筆）。retrieve_dual 走兩路：法條路(排除判決，主力) + 判決路(只取判決、
+# 獨立門檻、嚴格上限 M=3，少而精避免噪音過載——context7：多餘 context 反降答案品質)。
+from app.rag import retrieve_dual
+
+
+class _FakeVectorStores:
+    def __init__(self):
+        self.search_calls = []
+
+    def search(self, **kwargs):
+        self.search_calls.append(kwargs)
+        val = (kwargs.get("filters") or {}).get("value", "?")
+        data = [SimpleNamespace(score=0.7, filename=f"{val}-{i}.txt",
+                                attributes={"doc_type": val}) for i in range(3)]
+        return SimpleNamespace(data=data)
+
+
+class _FakeClientVS:
+    def __init__(self):
+        self.vector_stores = _FakeVectorStores()
+
+
+def test_retrieve_dual_runs_two_routes_with_correct_filters():
+    client = _FakeClientVS()
+    out = retrieve_dual(client, "資遣費怎麼算", vector_store_id="vs_x")
+    calls = client.vector_stores.search_calls
+    assert len(calls) == 2
+    # 法條路：排除判決（doc_type ne 判決）
+    assert calls[0]["filters"] == {"type": "ne", "key": "doc_type", "value": "判決"}
+    # 判決路：只取判決（eq）、上限 3
+    assert calls[1]["filters"] == {"type": "eq", "key": "doc_type", "value": "判決"}
+    assert calls[1]["max_num_results"] == 3
+    assert "law" in out and "judgment" in out
+    assert len(out["judgment"]) == 3
+
+
+def test_retrieve_dual_respects_caps_and_thresholds():
+    client = _FakeClientVS()
+    retrieve_dual(client, "q", vector_store_id="vs_x",
+                  law_k=15, law_threshold=0.5, judgment_m=2, judgment_threshold=0.45)
+    law_call, jud_call = client.vector_stores.search_calls
+    assert law_call["max_num_results"] == 15
+    assert law_call["ranking_options"] == {"score_threshold": 0.5}
+    assert jud_call["max_num_results"] == 2
+    assert jud_call["ranking_options"] == {"score_threshold": 0.45}
+
+
+class _FakeVSJudgmentEmpty:
+    """判決路回空（一般純法條題常見），法條路正常——驗證空結果不報錯、不互相影響。"""
+    def __init__(self):
+        self.search_calls = []
+
+    def search(self, **kwargs):
+        self.search_calls.append(kwargs)
+        # 判決路用 eq，法條路用 ne（兩者 value 都是「判決」，須以 type 區分）。
+        if (kwargs.get("filters") or {}).get("type") == "eq":
+            return SimpleNamespace(data=[])
+        return SimpleNamespace(data=[SimpleNamespace(
+            score=0.8, filename="law.txt", attributes={"doc_type": "法條"})])
+
+
+def test_retrieve_dual_handles_empty_judgment_route():
+    client = SimpleNamespace(vector_stores=_FakeVSJudgmentEmpty())
+    out = retrieve_dual(client, "純法條問題", vector_store_id="vs_x")
+    assert out["judgment"] == []      # 判決路空：不報錯、回空 list
+    assert len(out["law"]) == 1       # 法條路不受判決路空影響
 
 
 def test_parse_response_surfaces_incomplete_reason():

@@ -781,8 +781,38 @@ git commit -m "feat: SSE 串流問答 + markdown 指示 + gpt-5.4-mini 參數（
 - [x] **DB 稽核 agent**（release gate，判定 PASS-WITH-FIXES）：盤查組成/空殼/母法對應/重複/真實性/編碼 → 落實 P0/P1 修正（剔除 22、略過 141、補分類、防壞 URL）。
 - [x] **重建索引**：append 1032 檔到 `vs_6a27e1fb…`（同 ID、3 批 completed/failed=0、Railway 變數免改）。上線檢索抽查確認施行細則/函釋/FAQ 進得了檢索、補足空白。
 
+## Phase C — 上線後生產修補（2026-06-10，commit `f9c72e3`、`fab1842`，皆已 push main 部署）
+
+> 上線後使用者回報兩類生產問題；各以 systematic-debugging（真實 API 診斷定根因）+ context7 主流解法 + TDD + request/receive code review 處理，真實 API 與 production 雙重驗證。完整根因/解法/驗證見 spec §J。
+
+- [x] **① 答案截斷且無來源/追問**（commit `f9c72e3`）：root cause = 串流只認 `response.completed`，但推理模型撞 `max_output_tokens`（含推理 token）時以 `response.incomplete` 終結 → 永不發 `final` → 截斷且無 citations/evidence/followups（三症狀同源）。
+  `rag.py` 終結事件全收（completed/incomplete/failed，`_terminal_response` 精確比對）+ `parse_response` 帶 `status/truncated/incomplete_reason` + `max_output_tokens` 2048→4096 + `suggest_followups` 防壞 JSON；`main.py` `/api/suggest` 優雅降級 + 截斷 telemetry；`index.html` 降級 finalize + 截斷/failed 誠實提示 + flush buf。測試 pytest +9、e2e +2（`__NOFINAL__`/`__FAILEMPTY__`）。
+- [x] **③ 表格「依據」欄整欄空白**（commit `fab1842`）：root cause = gpt-5.4-mini 把來源以 inline 引用標記（`turnNfileM`，M 對映 `file_search_call.results`）塞進答案，`_strip_citation_markers` 整段刪除不回收 → 純標記表達的依據欄變空。
+  `rag.py` 新增 `_linkify_citation_markers`（單一交替 regex 轉腳註 `[^k]`、依閱讀順序、同檔同號、超範圍安全丟棄）+ `_evidence_for_files`；`parse_response` 以 inline 標記為第一優先（cited evidence 與腳註對齊）；`index.html` 最終以權威 `evt.answer` 渲染。測試 pytest +5、e2e +1（`__MARKERS__`）。
+- [x] **驗證**：pytest 95 綠、e2e 11 桌機+1 行動、ruff(app/) 全過；真實 API 確認（incomplete 終結事件、依據欄 0 空白列）；production 煙霧測試通過。
+
 ## 未竟（後續）
 
 - [ ] **判決語料**：取得司法院 opendata 帳密（環境變數）後，於 00–06 時段以 `Auth→JList→JDoc` 補；建議改用裁判書查詢系統挑案號再 `JDoc` 逐則抓。
-- [ ] **金鑰撤換**：`.env`/對話外洩之 `sk-svcacct-…`。
+- [ ] **金鑰撤換**：`.env`/對話外洩之 `sk-svcacct-…` 與 `RAILWAY_API_TOKEN`。
 - [ ] **（選）公司法函釋抽樣**：目前 ~48%（結構性，已保留全量）；如要更均衡可依時近性抽樣。
+
+## Phase D — 判決語料 + 檢索分流抗稀釋（2026-06-11，進行中；詳 spec §K）
+
+> 補齊 `doc_type=判決` 語料層並解決判決檢索「結構性弱勢」。完整設計、PoC 數據、參數依據見
+> `docs/superpowers/specs/2026-06-09-legal-rag-7fixes-design.md` §K。memory：`judgment-corpus-pipeline`。
+
+**已完成（本 session）**
+- [x] 判決取得 pipeline：**opendata 會員月度 RAR 下載**（`fid=datasetId+12310`，跨年連續）——
+      **取代** 上面「判決語料」那條原構想的「API 00–06 時段 Auth→JList→JDoc」（月檔無時段限制、可批次，務實得多）。
+- [x] 精篩 `--strict`（母法 ≥3 次或在案由，排洗錢假陽性）；chunk 判決 2048/512 分流。
+- [x] 抗稀釋①：`rag.py` `score_threshold=0.5`（不拉高 max_num_results）。TDD 鎖定。
+- [x] 抗稀釋②：`retrieve_dual()` 兩路檢索保障判決名額（法條 top-12 + 判決獨立 top-3）。
+      實證：單路判決 0 筆 → 分流 6 筆進場。TDD `test_retrieve_dual_*`（pytest 97 綠）。
+
+**待辦（下個 session）**
+- [ ] **生產串接**：`answer_question`/`astream_answer` 改走 `retrieve_dual` 自組 context；連帶
+      `parse_response`（citations/evidence）、SSE 串流、前端 `.legal-pre`。屬架構級重構，需完整測試。
+- [ ] **語料上傳**：近 2–3 年分層抽樣（每月 ~535 strict，目標 1–1.5 萬筆）。`data/judgments/`
+      已備 ~2,800 筆原料；上傳暫停待生產整合定案（store 現僅早期 PoC 106 筆判決）。
+- [ ] **（選）去 boilerplate**：剝程序套語提升判決路 score（實測僅 +2.5%，輔助性）。

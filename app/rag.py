@@ -63,6 +63,13 @@ _MODEL_PARAMS = {
     "max_output_tokens": 4096,
 }
 
+# file_search 檢索品質把關（語料含長篇判決後的「抗稀釋」設計）：
+# 以 hybrid score（0–1）的 score_threshold 過濾低相關 chunk——相關判決 score 夠高自然
+# 補上實務見解，不相關判決被擋在 context 外。刻意「不」拉高 max_num_results（維持預設 20）：
+# 判決 chunk 偏大（2048 token），拉高筆數會灌爆 context、徒增成本與首 token 延遲；
+# 用 threshold 降噪是零額外成本（甚至更省 token）的抗稀釋手段。
+FILE_SEARCH_RANKING_OPTIONS = {"score_threshold": 0.5}
+
 # 串流終結事件型別：Responses API 除了正常完成的 response.completed，還可能以
 # response.incomplete（撞 max_output_tokens 等）或 response.failed 結束——三者都帶 .response。
 # 原本只認 completed，導致 incomplete 截斷時永不發 final（無 citations/evidence/followups）。
@@ -271,6 +278,39 @@ def parse_response(response):
     }
 
 
+# —— 檢索分流：判決保障名額（方向1，解決判決結構性弱勢）——
+# 判決 score 天生輸法條（context7 + 實測：長篇論述 vs 單條法規，語意密度差 ~12%），
+# 單路 file_search top-20 會被高分法條擠光名額（實測一般題判決 0 筆）。故改走兩路獨立
+# vector_stores.search：法條路為主力（多取），判決路獨立、低門檻、嚴格上限（少而精——
+# context7：多餘低相關 context 反而降低答案品質、燒 token、增延遲）。
+LAW_TOP_K = 12
+JUDGMENT_TOP_M = 3            # 判決上限：實測 score 高且平坦，>3 多為重複資訊＋噪音
+DUAL_LAW_THRESHOLD = 0.5
+# 判決專屬門檻（與法條路解耦）：判決弱勢題 score 實測低至 0.35–0.62（PoC 資遣費題），
+# 若沿用法條的 0.5 會把這些「正要救」的判決砍掉，故設 0.35。對「法條池門檻上升」免疫。
+DUAL_JUDGMENT_THRESHOLD = 0.35
+
+
+def retrieve_dual(client, query, *, vector_store_id,
+                  law_k=LAW_TOP_K, law_threshold=DUAL_LAW_THRESHOLD,
+                  judgment_m=JUDGMENT_TOP_M, judgment_threshold=DUAL_JUDGMENT_THRESHOLD):
+    """兩路檢索保障判決名額。回傳 {"law": [...], "judgment": [...]}（各為 search result list）。
+
+    法條路（doc_type≠判決）取 law_k 筆為主力；判決路（doc_type=判決）獨立檢索、上限
+    judgment_m 筆。用獨立 vector_stores.search 而非 file_search tool，才能對兩類各設名額
+    與門檻——否則判決會被天生高分的法條擠光。
+    """
+    law = client.vector_stores.search(
+        vector_store_id=vector_store_id, query=query, max_num_results=law_k,
+        filters={"type": "ne", "key": "doc_type", "value": "判決"},
+        ranking_options={"score_threshold": law_threshold})
+    judgment = client.vector_stores.search(
+        vector_store_id=vector_store_id, query=query, max_num_results=judgment_m,
+        filters={"type": "eq", "key": "doc_type", "value": "判決"},
+        ranking_options={"score_threshold": judgment_threshold})
+    return {"law": law.data, "judgment": judgment.data}
+
+
 def answer_question(client, question, *, vector_store_id, model, previous_response_id=None):
     """以 file_search tool 對 vector store 提問，回傳 parse_response 的結果。
 
@@ -288,7 +328,11 @@ def _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
         "model": model,
         "input": question,
         "instructions": ANSWER_INSTRUCTIONS,
-        "tools": [{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+        "tools": [{
+            "type": "file_search",
+            "vector_store_ids": [vector_store_id],
+            "ranking_options": FILE_SEARCH_RANKING_OPTIONS,
+        }],
         "include": ["file_search_call.results"],
         **_MODEL_PARAMS,
     }
