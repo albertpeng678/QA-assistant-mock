@@ -700,6 +700,15 @@ def test_build_context_block_preserves_url_when_present():
     assert sources[0]["url"] == "https://x"
 
 
+def test_build_context_block_carries_file_id():
+    # 判決原文不在 production 檔案系統（gitignored），「展開原文全文」改走
+    # vector_stores.files.content——sources 必須帶 file_id 供前端調 /api/source_vs。
+    j = _r("臺北地院-判決-案.txt", "判決內容", 0.5, "判決")
+    j.file_id = "file_abc123"
+    _, sources = build_context_block([], [j])
+    assert sources[0]["file_id"] == "file_abc123"
+
+
 def test_build_context_block_dedupes_same_filename_keeps_best():
     # 真實情況（個資外洩題實測）：判決路同一份判決回多個 chunk，
     # 不應變成多個來源 / 重複 citations；同檔合併為單一 [來源N]、最高分 chunk 領頭。

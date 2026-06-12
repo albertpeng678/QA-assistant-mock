@@ -432,6 +432,11 @@ def build_context_block(law, judgment):
             url = _result_url(best)
             if url:
                 entry["url"] = url
+            file_id = getattr(best, "file_id", None)
+            if file_id:
+                # 判決原文不在 production 檔案系統（data/judgments gitignored），
+                # 前端「展開原文全文」靠 file_id 走 /api/source_vs 自 vector store 取回。
+                entry["file_id"] = file_id
             sources.append(entry)
             lines.append(f"[來源{idx}]（{filename}）\n{text}")
 

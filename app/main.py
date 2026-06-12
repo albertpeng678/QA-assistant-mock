@@ -13,6 +13,7 @@
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Literal
@@ -243,6 +244,34 @@ def source(filename: str):
     if data_root not in target.parents or not target.is_file():
         raise HTTPException(status_code=404, detail="找不到該條文原文")
     return {"filename": filename, "text": target.read_text(encoding="utf-8")}
+
+
+# ---------- /api/source_vs/{file_id}：判決原文自 vector store 取回 ----------
+_FILE_ID_RE = re.compile(r"^file[_-][A-Za-z0-9_-]{1,64}$")  # 長度上限：防超長垃圾 id 刷 OpenAI/Sentry
+
+
+@app.get("/api/source_vs/{file_id}")
+def source_vs(file_id: str):
+    """判決原文全文（data/judgments 不進 repo，production 無本地檔 → 走 vector store）。
+
+    file_id 來自檢索結果（build_context_block 的 sources），格式白名單防護、
+    且只能讀本服務自己的 VECTOR_STORE_ID；OpenAI 端任何失敗一律優雅 404
+    （前端退回「請參考上方摘要」），不冒泡 500。
+    """
+    if not _FILE_ID_RE.fullmatch(file_id):
+        raise HTTPException(status_code=404, detail="無效的檔案識別碼")
+    try:
+        client = OpenAI(api_key=config.OPENAI_API_KEY)
+        parts = client.vector_stores.files.content(
+            file_id, vector_store_id=config.VECTOR_STORE_ID)
+        text = "\n".join(p.text for p in parts if getattr(p, "text", None))
+    except Exception as exc:  # noqa: BLE001 - 原文取回是輔助功能，失敗不可 500
+        logger.warning("source_vs 取回原文失敗 file_id=%s：%s", file_id, exc)
+        _capture(exc)
+        raise HTTPException(status_code=404, detail="原文取回失敗") from exc
+    if not text.strip():
+        raise HTTPException(status_code=404, detail="原文為空")
+    return {"file_id": file_id, "text": text}
 
 
 # ---------- /api/feedback ----------

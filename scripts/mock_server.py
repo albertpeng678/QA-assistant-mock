@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -41,8 +41,20 @@ EVIDENCE = [
     {"filename": "臺北地院-判決-個資外洩損害賠償案.txt",
      "text": "本院認被告未於知悉外洩後即時通知當事人，違反個人資料保護法第12條通知義務，"
              "應負損害賠償責任。惟原告請求之金額，審酌其實際損害…",
-     "score": 0.41, "doc_type": "判決"},
+     "score": 0.41, "doc_type": "判決", "file_id": "file_mockjudgment01"},
 ]
+
+# 判決原文全文（mock /api/source_vs：production 走 vector_stores.files.content）
+JUDGMENT_FULL_TEXT = (
+    "來源:司法院裁判書系統|效力:判決|字號:TPDV,112,訴,999|裁判日:2024-06-26|母法:個人資料保護法\n\n"
+    "臺灣臺北地方法院民事判決\n112年度訴字第999號\n"
+    "原告主張：被告經營網路平台，因系統疏失致原告個人資料外洩…\n"
+    "本院判斷：按個人資料保護法第12條，公務機關或非公務機關違反本法規定，"
+    "致個人資料被竊取、洩漏、竄改或其他侵害者，應查明後以適當方式通知當事人。"
+    "被告於知悉外洩事故後逾二月始通知當事人，難認即時，違反通知義務明確…\n"
+    "綜上所述，原告依個資法第29條請求被告賠償，為有理由，應予准許。\n"
+    "中華民國113年6月26日\n民事第三庭法官"
+)
 CITES = [e["filename"] for e in EVIDENCE]
 
 # 職能揭露 mock：能力清單 + 能力回答 + 缺口答案
@@ -186,6 +198,13 @@ async def suggest(req: Request):
 @app.post("/api/feedback")
 async def feedback(req: Request):
     return {"ok": True}
+
+
+@app.get("/api/source_vs/{file_id}")
+def source_vs(file_id: str):
+    if file_id == "file_mockjudgment01":
+        return {"file_id": file_id, "text": JUDGMENT_FULL_TEXT}
+    raise HTTPException(status_code=404, detail="原文取回失敗")
 
 
 @app.get("/api/source/{filename}")

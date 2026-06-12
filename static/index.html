@@ -74,6 +74,10 @@
 
   /* —— 缺口⑤：保留法條原始換行/縮排結構 —— */
   .legal-pre{ white-space:pre-wrap; word-break:break-word; }
+  /* 證據卡摘要夾制：同檔合併 top-2 chunk 後判決 snippet 可達數千字，預設只露 8 行、
+     底部淡出，全文靠「展開原文全文」——否則卡片形同預設攤開全文。 */
+  .evi-snippet{ display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:8;
+                overflow:hidden; position:relative; }
 
   /* —— 缺口⑦：確定性層級標籤（填色 chip：墨／teal／amber／灰，2 低飽和輔色經使用者核可）—— */
   .tier{ display:inline-block; font-family:'Public Sans'; font-size:.74em; font-weight:700;
@@ -375,7 +379,7 @@ function advanceStages(ui, evt){
   }
 }
 
-function escapeHtml(s){ const d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
+function escapeHtml(s){ const d=document.createElement("div"); d.textContent=s; return d.innerHTML.replaceAll('"',"&quot;"); }  // 補引號：雙引號屬性注入防護
 function scrollDown(){ requestAnimationFrame(()=> document.querySelector("main").scrollTo({top:1e9, behavior:"smooth"})); }
 
 /* —— 送出問題：SSE 串流 —— */
@@ -612,7 +616,7 @@ function renderEvidence(activeFilename){
       ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener noreferrer"
             class="open-link mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
            <i data-lucide="external-link" class="icon-xs"></i> 開啟官方原文</a>`
-      : `<button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
+      : `<button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}" data-file-id="${escapeHtml(e.file_id||"")}">
            <i data-lucide="external-link" class="icon-xs"></i> 展開原文全文</button>
          <div class="full-text legal-pre hidden font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>`;
     return `
@@ -622,7 +626,7 @@ function renderEvidence(activeFilename){
           <span class="text-[var(--blood)] flex-1 truncate">${escapeHtml(e.filename||"")}</span>
           <span class="text-[10px] text-[var(--ink-50)] font-normal">${score}</span>
         </div>
-        <div class="legal-pre font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2">${escapeHtml(e.text||"")}</div>
+        <div class="legal-pre evi-snippet font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2">${escapeHtml(e.text||"")}</div>
         ${action}
       </div>`;
   }).join("");
@@ -639,17 +643,23 @@ async function openFullText(btn){
   const box = card.querySelector(".full-text");
   if(!box.classList.contains("hidden")){ box.classList.add("hidden"); return; }
   box.classList.remove("hidden");
+  if(box.dataset.loaded === "1") return;   // toggle 快取：再展開不重打 API
   box.textContent = "載入中…";
-  try{
-    const r = await fetch("/api/source/"+encodeURIComponent(btn.dataset.filename));
-    if(!r.ok){
-      // production data/ 為空 → 404：友善降級，保留上方 evidence snippet
-      box.textContent = "原文尚未建立索引，請參考上方摘要。";
-      return;
-    }
-    const { text } = await r.json();
-    box.textContent = text || "原文尚未建立索引，請參考上方摘要。";
-  }catch{ box.textContent = "原文尚未建立索引，請參考上方摘要。"; }
+  // 判決等無本地檔的來源：優先以 file_id 自 vector store 取回全文（/api/source_vs）；
+  // 無 file_id（舊資料/法條）退回本地 /api/source。兩路皆失敗 → 友善降級保留 snippet。
+  const fid = btn.dataset.fileId;
+  const endpoints = [];
+  if(fid) endpoints.push("/api/source_vs/"+encodeURIComponent(fid));
+  endpoints.push("/api/source/"+encodeURIComponent(btn.dataset.filename));
+  for(const ep of endpoints){
+    try{
+      const r = await fetch(ep);
+      if(!r.ok) continue;
+      const { text } = await r.json();
+      if(text){ box.textContent = text; box.dataset.loaded = "1"; return; }
+    }catch{ /* 換下一個端點 */ }
+  }
+  box.textContent = "原文尚未建立索引，請參考上方摘要。";
 }
 
 function openOffcanvas(activeFilename){ renderEvidence(activeFilename); scrim.classList.add("open"); offcanvas.classList.add("open"); }

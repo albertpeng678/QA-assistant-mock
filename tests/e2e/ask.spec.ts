@@ -221,6 +221,20 @@ test.describe("法遵 RAG 問答 E2E", () => {
       // 改為展開全文按鈕
       await expect(judgmentCard.locator("button.open-full")).toBeVisible();
     });
+
+    await test.step("點「展開原文全文」→ 以 file_id 取回完整判決書", async () => {
+      await judgmentCard.locator("button.open-full").click();
+      const full = judgmentCard.locator(".full-text");
+      await expect(full).toBeVisible();
+      // 完整判決書內容（/api/source_vs，非 snippet）：含案號與主文結尾
+      await expect(full).toContainText("112年度訴字第999號");
+      await expect(full).toContainText("中華民國113年6月26日");
+    });
+
+    await test.step("再點一次 → 收合全文", async () => {
+      await judgmentCard.locator("button.open-full").click();
+      await expect(judgmentCard.locator(".full-text")).toBeHidden();
+    });
   });
 
   test("跨裝置（手機）問答流程 @mobile", async ({ page }) => {
