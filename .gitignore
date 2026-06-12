@@ -19,6 +19,3 @@ blob-report/
 
 # 裁判書語料（由 scripts/build_judgment_corpus.py pipeline 重建，不進 repo；量大且含個資）
 data/judgments/
-
-# 接手指南含密碼，不進 repo；換機請與 .env 一起手動複製
-HANDOFF.md
