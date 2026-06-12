@@ -52,7 +52,11 @@ _MODEL_PARAMS = {"reasoning": {"effort": "low"},
 ### 3.5 易理解性稽核補強（UX audit 必補項，皆 prompt + CSS，仍屬範圍 1）
 1. **BLUF 首行硬約束**：≤40 字、**只陳述「可做什麼＋關鍵期限（粗體）」**;所有否定/除外/定義一律下沉到 bullet。指示附正例：「**公開滿 18 小時後**才能買賣（證交法§157-1）。」否則 C1 復發。
 2. **重點 bullet**：基準 3 個、上限 4;每點 ≤1 句,句首放動作/條件,法條括號收尾;超過 4 點才升級表格。
-3. **表格手機策略**：表格**欄數上限 3**（4 欄禁用）;窄螢幕 CSS 將 `.answer-prose table` 改 `display:block` 橫向捲動容器（或卡片堆疊）,避免爆版;條號一律縮寫 `§157-1`（勿用「第157條之1第1項」長 token）。此為**前端 CSS**（走 live demo gate）。
+3. **表格裝置制約（context7/Tailwind v3 認證做法）**：
+   - **`overflow-x-auto` 包裹**：用 **marked custom renderer** 覆寫 `table`,將 `<table>` 包進 `<div class="overflow-x-auto -mx-1">…</div>`（Tailwind class,CDN 已載）。寬表格在窄螢幕**橫向捲動**而非爆版,**無需 media query、全尺寸通用**（契合本產品零 `@media` 的事實）。
+   - **源頭縮寬**：prompt 端表格**欄數上限 3**（4 欄禁用）+ 條號一律縮寫 `§157-1`（勿用「第157條之1第1項」長 token）,降低需捲動的機率。
+   - 不採「表格→卡片堆疊」（需 media query + 複雜 CSS,較重）。context7 來源:`/websites/v3_tailwindcss` overflow / breakpoints。
+   - 屬**前端**（marked renderer + CSS,走 live demo gate）。
 4. **兩維度分離**：badge = 確定性層級（明文/解釋裁量/實務見解）;**scope/coverage（已收錄 vs 語料未收錄 vs 法律未明文）另以 meta 提示表達**,不擠進同一 enum。`classify_tier` enum 含 `語料未涵蓋` 以涵蓋「未收錄」。
 5. **caveat 隔離**：免責聲明與不確定性以 blockquote/callout **視覺隔離**置於答案末端 meta 區,不混進內容流。
 6. **關鍵數字強調一次**：BLUF 的關鍵數字/期限用 `**粗體**`,全答案僅一處主焦點（勿重複稀釋）。
