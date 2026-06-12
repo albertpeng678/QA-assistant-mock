@@ -134,3 +134,11 @@ class _FakeAIntentClient:
 def test_aclassify_intent_meta():
     out = asyncio.run(aclassify_intent(_FakeAIntentClient('{"intent":"meta_capability"}'), "你會什麼", model="m"))
     assert out == "meta_capability"
+
+
+def test_capability_answer_filters_catch_all_其他():
+    m = {"doc_type_counts": {"法條": 5}, "categories": ["個資", "其他", "勞動"], "cutoff": "2026-06", "total": 5}
+    ans = capability_answer(m)
+    # 「其他」catch-all 不應出現在法令領域；個資/勞動 仍在
+    assert "其他" not in ans
+    assert "個資" in ans and "勞動" in ans

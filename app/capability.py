@@ -28,7 +28,8 @@ def _fmt_counts(counts):
 def capability_answer(manifest):
     """由 manifest 組出固定結構 Markdown（不經 LLM、零幻覺）。"""
     counts = manifest.get("doc_type_counts", {})
-    cats = "・".join(manifest.get("categories", [])) or "（領域盤點中）"
+    # 濾掉 catch-all「其他」：它對使用者不是有意義的法令領域（與前端空狀態 tag 一致）
+    cats = "・".join(c for c in manifest.get("categories", []) if c != "其他") or "（領域盤點中）"
     cutoff = manifest.get("cutoff", "")
     cutoff_line = f"\n\n語料截止：{cutoff}" if cutoff else ""
     return (
