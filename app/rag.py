@@ -314,7 +314,7 @@ def retrieve_dual(client, query, *, vector_store_id,
 def _result_text(r):
     """取一筆 vector_stores.search result 的文字：content[] 串接；無則退回 .text。"""
     content = getattr(r, "content", None)
-    if isinstance(content, list):
+    if isinstance(content, list) and content:
         return "\n".join((getattr(c, "text", None) or "") for c in content).strip()
     return getattr(r, "text", None) or ""
 

@@ -639,3 +639,9 @@ def test_build_context_block_preserves_url_when_present():
     law = [_r("個資法-第12條.txt", "應通知當事人。", 0.9, "法條", url="https://x")]
     _, sources = build_context_block(law, [])
     assert sources[0]["url"] == "https://x"
+
+
+def test_result_text_empty_content_falls_back_to_text():
+    from app.rag import _result_text
+    r = SimpleNamespace(content=[], text="後備文字")
+    assert _result_text(r) == "後備文字"
