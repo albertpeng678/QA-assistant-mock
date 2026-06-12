@@ -601,3 +601,41 @@ def test_answer_instructions_cover_table_and_certainty_tiers():
     # ⑦：區分明文 / 解釋空間 / 語料未涵蓋（誠實兜底）
     for token in ["明文", "解釋", "語料"]:
         assert token in text
+
+
+# ---- (J) build_context_block：自組檢索來源區塊 ----
+from app.rag import build_context_block
+
+
+def _r(filename, text, score, doc_type, url=None):
+    attrs = {"doc_type": doc_type}
+    if url:
+        attrs["url"] = url
+    return SimpleNamespace(filename=filename, score=score, attributes=attrs,
+                           content=[SimpleNamespace(type="text", text=text)])
+
+
+def test_build_context_block_sections_and_indices():
+    law = [_r("勞動基準法-第24條.txt", "加班費依本條計算。", 0.82, "法條")]
+    judgment = [_r("臺北地院-判決-資遣費案.txt", "本院認資遣費應…", 0.40, "判決")]
+    context, sources = build_context_block(law, judgment)
+    assert "法規依據" in context and "判決見解" in context
+    assert "[來源1]" in context and "[來源2]" in context
+    assert sources[0]["filename"] == "勞動基準法-第24條.txt"
+    assert sources[0]["doc_type"] == "法條"
+    assert sources[1]["filename"] == "臺北地院-判決-資遣費案.txt"
+    assert sources[1]["doc_type"] == "判決"
+    assert "加班費依本條計算。" in sources[0]["text"]
+
+
+def test_build_context_block_empty_judgment_route():
+    law = [_r("公司法-第23條.txt", "負責人忠實義務。", 0.7, "法條")]
+    context, sources = build_context_block(law, [])
+    assert "判決見解" not in context
+    assert len(sources) == 1
+
+
+def test_build_context_block_preserves_url_when_present():
+    law = [_r("個資法-第12條.txt", "應通知當事人。", 0.9, "法條", url="https://x")]
+    _, sources = build_context_block(law, [])
+    assert sources[0]["url"] == "https://x"

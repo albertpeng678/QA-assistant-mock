@@ -311,6 +311,55 @@ def retrieve_dual(client, query, *, vector_store_id,
     return {"law": law.data, "judgment": judgment.data}
 
 
+def _result_text(r):
+    """取一筆 vector_stores.search result 的文字：content[] 串接；無則退回 .text。"""
+    content = getattr(r, "content", None)
+    if isinstance(content, list):
+        return "\n".join((getattr(c, "text", None) or "") for c in content).strip()
+    return getattr(r, "text", None) or ""
+
+
+def _result_doc_type(r):
+    attrs = getattr(r, "attributes", None)
+    if isinstance(attrs, dict):
+        return attrs.get("doc_type")
+    return getattr(attrs, "doc_type", None) if attrs else None
+
+
+def build_context_block(law, judgment):
+    """把雙路檢索結果組成「給模型讀」的 context 字串，並回確定性的 sources 清單。
+
+    回 (context_str, sources)；sources 依【法規依據】→【判決見解】序號排列，
+    每筆 {filename, text, score, doc_type, url?}，供 parse_dual_response 組 citations/evidence。
+    """
+    sources = []
+    lines = []
+
+    def add_section(title, results):
+        if not results:
+            return
+        lines.append(f"## {title}")
+        for r in results:
+            idx = len(sources) + 1
+            filename = getattr(r, "filename", None) or ""
+            text = _result_text(r)
+            entry = {
+                "filename": filename,
+                "text": text,
+                "score": getattr(r, "score", None),
+                "doc_type": _result_doc_type(r),
+            }
+            url = _result_url(r)
+            if url:
+                entry["url"] = url
+            sources.append(entry)
+            lines.append(f"[來源{idx}]（{filename}）\n{text}")
+
+    add_section("法規依據", law)
+    add_section("判決見解", judgment)
+    return "\n\n".join(lines), sources
+
+
 def answer_question(client, question, *, vector_store_id, model, previous_response_id=None):
     """以 file_search tool 對 vector store 提問，回傳 parse_response 的結果。
 
