@@ -164,25 +164,25 @@ test.describe("法遵 RAG 問答 E2E", () => {
       await askFirstStarter(page);
     });
 
+    // Playwright locators 是 lazy 的，在 step 外宣告一次即可安全複用
+    const judgmentCard = page
+      .locator("#oc-body .evi-card")
+      .filter({ hasText: "臺北地院-判決-個資外洩損害賠償案.txt" });
+
     await test.step("點第 4 個腳註引用（判決）開 offcanvas", async () => {
       await page.locator('[data-answer] .cite-ref[data-ref="4"]').click();
       await expect(page.locator("#offcanvas")).toHaveClass(/open/);
+      await expect(judgmentCard).toBeVisible();
+      // 判決卡應獲得 active 高亮（對稱 [^1] 測試的斷言）
+      await expect(judgmentCard).toHaveClass(/active/);
     });
 
     await test.step("判決見解卡顯示 snippet 文字", async () => {
-      // 在 offcanvas 的 #oc-body 內定位 .evi-card，排除 src-row
-      const judgmentCard = page
-        .locator("#oc-body .evi-card")
-        .filter({ hasText: "臺北地院-判決-個資外洩損害賠償案.txt" });
-      await expect(judgmentCard).toBeVisible();
       // snippet 含「通知義務」（來自 evidence text）
       await expect(judgmentCard).toContainText("通知義務");
     });
 
     await test.step("無 url → 不渲染外連 a.open-link（優雅降級）", async () => {
-      const judgmentCard = page
-        .locator("#oc-body .evi-card")
-        .filter({ hasText: "臺北地院-判決-個資外洩損害賠償案.txt" });
       // 判決無 url，不得有外連連結
       await expect(judgmentCard.locator("a.open-link")).toHaveCount(0);
       // 改為展開全文按鈕
