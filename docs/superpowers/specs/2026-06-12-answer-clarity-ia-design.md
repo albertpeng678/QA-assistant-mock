@@ -49,6 +49,16 @@ _MODEL_PARAMS = {"reasoning": {"effort": "low"},
 - Layer-0 badge：沿用 `tierTags()`（答案開頭的 `【…】` → chip）。確認開頭單一標記時 chip 顯示在結論前。
 - **不新增折疊 widget**；Layer 1 細節靠 markdown H2/H3 + bullet 表達層次（NN/g：可掃描即可，能滾動就不必折疊）。
 
+### 3.5 易理解性稽核補強（UX audit 必補項，皆 prompt + CSS，仍屬範圍 1）
+1. **BLUF 首行硬約束**：≤40 字、**只陳述「可做什麼＋關鍵期限（粗體）」**;所有否定/除外/定義一律下沉到 bullet。指示附正例：「**公開滿 18 小時後**才能買賣（證交法§157-1）。」否則 C1 復發。
+2. **重點 bullet**：基準 3 個、上限 4;每點 ≤1 句,句首放動作/條件,法條括號收尾;超過 4 點才升級表格。
+3. **表格手機策略**：表格**欄數上限 3**（4 欄禁用）;窄螢幕 CSS 將 `.answer-prose table` 改 `display:block` 橫向捲動容器（或卡片堆疊）,避免爆版;條號一律縮寫 `§157-1`（勿用「第157條之1第1項」長 token）。此為**前端 CSS**（走 live demo gate）。
+4. **兩維度分離**：badge = 確定性層級（明文/解釋裁量/實務見解）;**scope/coverage（已收錄 vs 語料未收錄 vs 法律未明文）另以 meta 提示表達**,不擠進同一 enum。`classify_tier` enum 含 `語料未涵蓋` 以涵蓋「未收錄」。
+5. **caveat 隔離**：免責聲明與不確定性以 blockquote/callout **視覺隔離**置於答案末端 meta 區,不混進內容流。
+6. **關鍵數字強調一次**：BLUF 的關鍵數字/期限用 `**粗體**`,全答案僅一處主焦點（勿重複稀釋）。
+7. **可驗證閱讀程度**：平均句長 ≤30 字、術語首見必括號白話、避免連續名詞堆疊——列入 cold-read 驗收清單。
+8. **（後續）側欄來源分組/限縮**：來源過多時按 doc_type 分組或顯 top-N（非本次必做,記著）。
+
 ## 4. 驗證
 - **單元**：ANSWER_INSTRUCTIONS 為字串，無法單測語意；改測「`_MODEL_PARAMS["text"]["verbosity"]=="low"`」與（若啟用備案）`classify_tier` 的 structured-output 解析/fallback。全 `pytest -q` 維持綠、`ruff` 過。
 - **真實驗證（IL-2，cold-read）**：Playwright 對 mock + **production** 跑數題（明文題/裁量題/未涵蓋題），cold-read PNG 確認：結論在第一行、層級 badge 出現、白話、密度下降、表格只在比較題。**5x 一致**。
