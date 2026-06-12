@@ -96,6 +96,8 @@ async def ask_stream(req: Request):
     meta = "__META__" in question
     gap = "__GAP__" in question
     nocover = "__NOCOVER__" in question  # 語料未涵蓋：無證據、語料未涵蓋層級
+    # 等待UX鉤子：__SLOWGEN__ 把 generating→首 token 拉長到 13s，驗收 >12s 安撫文案＋停止鍵。
+    slowgen = "__SLOWGEN__" in question
 
     def gen():
         if nocover:
@@ -156,6 +158,14 @@ async def ask_stream(req: Request):
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
             yield "data: [DONE]\n\n"
             return
+        # 等待UX：階段事件（與 astream_answer 同契約），mock 以小延遲讓階段推進可見。
+        yield "data: " + json.dumps({"type": "stage", "stage": "retrieving"}, ensure_ascii=False) + "\n\n"
+        time.sleep(0.6)
+        yield "data: " + json.dumps({"type": "stage", "stage": "retrieved",
+                                     "law_count": 3, "judgment_count": 1}, ensure_ascii=False) + "\n\n"
+        time.sleep(0.5)
+        yield "data: " + json.dumps({"type": "stage", "stage": "generating"}, ensure_ascii=False) + "\n\n"
+        time.sleep(13 if slowgen else 0.7)
         for ch in [ANSWER[i:i+12] for i in range(0, len(ANSWER), 12)]:
             yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
             time.sleep(0.04)

@@ -87,6 +87,31 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(answer).not.toContainText("|---");
   });
 
+  test("等待狀態：階段列推進（實數）後於首 token 收合", async ({ page }) => {
+    await page.goto("/");
+    await page.locator(`button.starter[data-q="${FIRST_STARTER}"]`).click();
+    // 送出即見階段列（樂觀回饋，第一步預設進行中）
+    await expect(page.locator('[data-st="retrieve"]')).toBeVisible();
+    // retrieved 事件 → 前兩步打勾並附實數（掛真實管線事件，非演戲）
+    await expect(page.locator('[data-st="retrieve"]')).toContainText("3 則");
+    await expect(page.locator('[data-st="judgment"]')).toContainText("1 則");
+    // 首 token → 整個等待面板（含骨架）收合，之後正常完成串流
+    await expect(page.locator("[data-wait]")).toHaveCount(0);
+    await expect(page.locator(".src-row")).toHaveCount(4);
+  });
+
+  test("等待狀態：>12s 顯安撫＋停止，按停止不留紅錯誤", async ({ page }) => {
+    test.setTimeout(40000);
+    await page.goto("/");
+    await page.locator("#q").fill("__SLOWGEN__ 個資外洩要通報誰？");
+    await page.locator("#send").click();
+    const reassure = page.locator("[data-reassure]");
+    await expect(reassure).toBeVisible({ timeout: 15000 });   // 12s 後出現
+    await page.locator("[data-stop]").click();
+    await expect(page.locator("[data-answer]").last()).toContainText("已停止生成");
+    await expect(page.locator("[data-wait]")).toHaveCount(0);
+  });
+
   test("明文題渲染 Layer-0 確定性 badge（缺口⑦）", async ({ page }) => {
     await askFirstStarter(page);
     // 新設計：單一 Layer-0 badge，來自後端 classify_tier（evt.tier），取代內文逐句【明文】標記

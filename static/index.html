@@ -87,6 +87,26 @@
   .stream-caret::after{ content:'▍'; color:var(--blood); animation:blink 1s steps(2) infinite; margin-left:1px; }
   @keyframes blink{ 0%,50%{opacity:1} 50.01%,100%{opacity:0} }
 
+  /* —— 等待狀態（NN/g：階段步驟列＋答案形骨架；>12s 安撫＋停止）—— */
+  .wait-stage{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-35); font-weight:500; }
+  .wait-stage .st-ic{ width:15px; height:15px; border-radius:50%; border:1.5px solid var(--ink-20);
+                      flex:none; display:flex; align-items:center; justify-content:center; font-size:9px; }
+  .wait-stage.done{ color:var(--ink-70); }
+  .wait-stage.done .st-ic{ background:var(--ink); border-color:var(--ink); color:var(--paper); }
+  .wait-stage.now{ color:var(--blood); font-weight:700; }
+  .wait-stage.now .st-ic{ border-color:var(--blood); }
+  .wait-stage.now .st-ic::after{ content:''; width:5px; height:5px; border-radius:50%; background:var(--blood);
+                                 animation:waitpulse 1.1s ease-in-out infinite; }
+  @keyframes waitpulse{ 0%,100%{opacity:.25; transform:scale(.7)} 50%{opacity:1; transform:scale(1)} }
+  .sk{ background:linear-gradient(90deg,var(--ink-08) 25%, #1a171426 37%, var(--ink-08) 63%);
+       background-size:400% 100%; animation:skshim 1.6s ease infinite; border-radius:6px; }
+  @keyframes skshim{ 0%{background-position:100% 0} 100%{background-position:0 0} }
+  .wait-reassure{ font-size:12px; color:var(--ink-50); background:#7a2e2e0a; border:1px solid var(--ink-12);
+                  border-radius:10px; padding:8px 12px; display:flex; align-items:center; gap:8px; }
+  .wait-stop{ font-size:11px; font-weight:700; color:var(--blood); border:1px solid #7a2e2e55;
+              border-radius:8px; padding:2px 10px; margin-left:auto; flex:none; cursor:pointer; }
+  .wait-stop:hover{ background:#7a2e2e14; }
+
   /* —— offcanvas —— */
   #scrim{ position:fixed; inset:0; background:#1a171466; opacity:0; pointer-events:none; transition:opacity .25s; z-index:40; }
   #scrim.open{ opacity:1; pointer-events:auto; }
@@ -291,7 +311,22 @@ function addAnswer(){
   const el = document.createElement("div");
   el.className = "space-y-3";
   el.innerHTML = `
-    <div class="answer-prose stream-caret" data-answer></div>
+    <div data-wait class="space-y-3">
+      <div class="space-y-1.5" role="status" aria-label="處理進度">
+        <div class="wait-stage now" data-st="retrieve"><span class="st-ic"></span><span>檢索條文與函釋…</span></div>
+        <div class="wait-stage" data-st="judgment"><span class="st-ic"></span><span>比對判決見解</span></div>
+        <div class="wait-stage" data-st="tier"><span class="st-ic"></span><span>研判確定性層級</span></div>
+        <div class="wait-stage" data-st="gen"><span class="st-ic"></span><span>生成回答</span></div>
+      </div>
+      <div class="space-y-2" aria-hidden="true">
+        <div class="sk h-5 w-20 rounded-xl"></div>
+        <div class="sk h-3 w-[88%]"></div><div class="sk h-3 w-[72%]"></div><div class="sk h-3 w-[55%]"></div>
+        <div class="sk h-8 w-full rounded-lg"></div><div class="sk h-8 w-full rounded-lg"></div>
+      </div>
+      <div data-reassure class="wait-reassure hidden">資料庫較大，正在整理回答…
+        <button data-stop class="wait-stop" aria-label="停止生成">■ 停止</button></div>
+    </div>
+    <div class="answer-prose stream-caret hidden" data-answer></div>
     <div data-sources class="space-y-2 hidden"></div>
     <div data-chips class="flex flex-wrap gap-2 hidden"></div>
     <div data-fb class="flex items-center gap-2 hidden">
@@ -301,12 +336,43 @@ function addAnswer(){
     </div>`;
   thread.appendChild(el);
   scrollDown();
-  return {
+  const ui = {
     answerEl: el.querySelector("[data-answer]"),
     sourcesEl: el.querySelector("[data-sources]"),
     chipsEl: el.querySelector("[data-chips]"),
     fbEl: el.querySelector("[data-fb]"),
+    waitEl: el.querySelector("[data-wait]"),
+    reassureEl: el.querySelector("[data-reassure]"),
+    stopBtn: el.querySelector("[data-stop]"),
   };
+  // 首 token／終局／錯誤時收掉等待面板（NN/g：串流本身就是進度，面板即收合）
+  ui.clearWait = () => {
+    if(ui._reassureTimer){ clearTimeout(ui._reassureTimer); ui._reassureTimer = null; }
+    ui.waitEl?.remove(); ui.waitEl = null;
+    ui.answerEl.classList.remove("hidden");
+  };
+  return ui;
+}
+
+/* —— 階段事件 → 步驟列推進（事件掛真實管線節點，見 astream_answer）—— */
+function advanceStages(ui, evt){
+  if(!ui.waitEl) return;
+  const mark = (key, cls, extra) => {
+    const row = ui.waitEl.querySelector(`[data-st="${key}"]`);
+    if(!row) return;
+    row.classList.remove("now"); row.classList.add(cls);
+    if(cls === "done") row.querySelector(".st-ic").textContent = "✓";
+    if(cls === "now") row.querySelector(".st-ic").textContent = "";
+    if(extra) row.querySelector("span:last-child").textContent += extra;
+  };
+  if(evt.stage === "retrieved"){
+    mark("retrieve", "done", ` — ${evt.law_count} 則`);
+    mark("judgment", "done", ` — ${evt.judgment_count} 則`);
+    mark("tier", "now");
+  } else if(evt.stage === "generating"){
+    mark("tier", "done");
+    mark("gen", "now");
+  }
 }
 
 function escapeHtml(s){ const d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
@@ -321,8 +387,14 @@ async function submit(text){
   document.getElementById("q").value = "";
   addQuestion(q);
   const ui = addAnswer();
+  ui.isFollowup = !!state.previousResponseId;   // 本輪是否延續輪（缺口橫幅抑制用）
   let answerText = "";
   let gotFinal = false;
+
+  // 等待UX：>12s 仍無首 token → 安撫文案＋停止鍵（NN/g 長等待要給逃生口）
+  const aborter = new AbortController();
+  ui.stopBtn?.addEventListener("click", () => aborter.abort());
+  ui._reassureTimer = setTimeout(() => { ui.reassureEl?.classList.remove("hidden"); scrollDown(); }, 12000);
 
   // 處理單一 SSE frame（抽出成函式，讓串流結束後也能 flush buf 殘段）
   const handleFrame = (frame) => {
@@ -331,7 +403,10 @@ async function submit(text){
     const payload = line.slice(5).trim();
     if(!payload || payload === "[DONE]") return;
     let evt; try{ evt = JSON.parse(payload); }catch(e){ console.warn("SSE JSON 解析失敗，跳過此 frame：", e, payload); return; }
-    if(evt.type === "delta"){
+    if(evt.type === "stage"){
+      advanceStages(ui, evt);
+    } else if(evt.type === "delta"){
+      if(ui.waitEl) ui.clearWait();          // 首 token：收合階段列＋骨架，串流即進度
       answerText += evt.text;
       // 缺口③：以 requestAnimationFrame 合併同影格多個 delta，並用 renderStream 平滑渲染
       if(!ui._raf){ ui._raf = requestAnimationFrame(()=>{ ui._raf = null; renderStream(ui.answerEl, answerText); scrollDown(); }); }
@@ -345,6 +420,7 @@ async function submit(text){
     const resp = await fetch("/api/ask/stream", {
       method:"POST", headers:{ "Content-Type":"application/json" },
       body: JSON.stringify({ question:q, previous_response_id: state.previousResponseId }),
+      signal: aborter.signal,
     });
     if(!resp.ok || !resp.body) throw new Error("HTTP "+resp.status);
 
@@ -372,12 +448,24 @@ async function submit(text){
     }
   }catch(err){
     if(!gotFinal){
+      ui.clearWait();
       ui.answerEl.classList.remove("stream-caret");
-      ui.answerEl.innerHTML = `<p class="text-[var(--blood)] flex items-center gap-1.5"><i data-lucide="alert-circle" class="icon-sm"></i> 抱歉，發生錯誤，請稍後再試。</p>`;
-      icons();
+      if(err && err.name === "AbortError"){
+        // 使用者按「停止」：有部分文字 → 以 partial 收尾；無 → 中性訊息（非錯誤）
+        if(answerText.trim()){
+          finalizeAnswer(ui, q, answerText, { partial:true, citations:[], evidence:[] });
+        }else{
+          ui.answerEl.innerHTML = `<p class="text-[var(--ink-50)] flex items-center gap-1.5"><i data-lucide="circle-slash" class="icon-sm"></i> 已停止生成。</p>`;
+          icons();
+        }
+      }else{
+        ui.answerEl.innerHTML = `<p class="text-[var(--blood)] flex items-center gap-1.5"><i data-lucide="alert-circle" class="icon-sm"></i> 抱歉，發生錯誤，請稍後再試。</p>`;
+        icons();
+      }
     }
   }finally{
     state.answering = false; document.getElementById("send").disabled = false;
+    ui.clearWait();
     ui.answerEl.classList.remove("stream-caret");
   }
 }
@@ -385,6 +473,7 @@ async function submit(text){
 /* —— 串流結束：渲染來源、引證、chips、feedback —— */
 function finalizeAnswer(ui, question, answerText, evt){
   if(ui._raf){ cancelAnimationFrame(ui._raf); ui._raf = null; }   // 取消未完成的串流影格
+  ui.clearWait?.();                                                // 等待面板若仍在（如 FAILEMPTY 無 delta）收掉
   ui.answerEl.classList.remove("stream-caret");
   state.previousResponseId = evt.response_id || state.previousResponseId;
 
@@ -416,7 +505,9 @@ function finalizeAnswer(ui, question, answerText, evt){
 
   // 缺口提示：dual_retrieved 且有檢索到參考條文時，誠實標示超出精準涵蓋範圍
   // （完全無證據＝語料未涵蓋，靠答案內【語料未涵蓋】層級表達，不在此重複提示）
-  if((evt.evidence_mode || "") === "dual_retrieved" && (evt.evidence || []).length){
+  // 延續輪（ui.isFollowup）不顯：延續句檢索常撈到無關來源、模型依指引改用前輪依據作答，
+  // 此時「超出涵蓋範圍」是錯誤標示（code review Important #1）。
+  if(!ui.isFollowup && (evt.evidence_mode || "") === "dual_retrieved" && (evt.evidence || []).length){
     const g = document.createElement("p");
     g.className = "text-[12px] mb-2 px-3 py-2 rounded-lg";
     g.style.cssText = "color:var(--blood); background:#7a2e2e10; border:1px solid #7a2e2e2e; line-height:1.6";
