@@ -165,3 +165,37 @@ def test_classify_tier_bad_json_falls_back():
 def test_aclassify_tier():
     out = _aio2.run(aclassify_tier(_FakeAIntentClient('{"tier":"明文"}'), "q", "ctx", model="m"))
     assert out == "明文"
+
+
+# ---- 範疇防護（out_of_scope，cookbook topical guardrail 三類制）----
+def test_classify_intent_out_of_scope():
+    c = _FakeIntentClient('{"intent": "out_of_scope"}')
+    assert classify_intent(c, "幫我翻譯成英文", model="m") == "out_of_scope"
+
+
+def test_classify_intent_unknown_value_falls_back_legal():
+    c = _FakeIntentClient('{"intent": "banana"}')
+    assert classify_intent(c, "x", model="m") == "legal_question"
+
+
+def test_classify_intent_chains_context_on_followup():
+    # 延續輪：classifier 帶 previous_response_id 看見對話脈絡（fork 不污染主鏈），
+    # 且 store=False（葉節點不入庫，context7/官方文件確認 instructions 不繼承）。
+    c = _FakeIntentClient('{"intent": "legal_question"}')
+    classify_intent(c, "好啊請幫我生成對照表", model="m", previous_response_id="resp_prev")
+    call = c.responses.calls[0]
+    assert call["previous_response_id"] == "resp_prev"
+    assert call["store"] is False
+
+
+def test_classify_intent_first_turn_omits_chain():
+    c = _FakeIntentClient('{"intent": "legal_question"}')
+    classify_intent(c, "個資法第6條？", model="m")
+    assert "previous_response_id" not in c.responses.calls[0]
+
+
+def test_intent_instructions_cover_out_of_scope_and_continuation():
+    # 指示必須教 classifier：延續肯定句→legal_question、翻譯/算數→out_of_scope（即使對話中）
+    assert "out_of_scope" in INTENT_INSTRUCTIONS
+    assert "翻譯" in INTENT_INSTRUCTIONS
+    assert "好啊" in INTENT_INSTRUCTIONS

@@ -46,17 +46,30 @@ def capability_answer(manifest):
 
 
 INTENT_INSTRUCTIONS = (
-    "判斷使用者查詢的意圖類別。\n"
+    "你是台灣法遵研究助理的意圖守門員（topical guardrail）。判斷使用者本輪查詢的意圖類別：\n"
     "- meta_capability：詢問本系統能做什麼、可回答哪類問題、語料涵蓋範圍、功能說明、"
     "「你是誰／你會什麼／你能幫我什麼」。\n"
-    "- legal_question：實質法規問題（需要檢索條文／函釋／判決）。\n"
-    "範例：『你能回答什麼？』→ meta_capability；『個資法第6條規定什麼？』→ legal_question。"
+    "- legal_question：實質法規／法遵問題（需要條文／函釋／判決），"
+    "**包含對先前法遵回答的延續請求**——如「好啊請幫我生成對照表」「請整理成表格」「繼續」等，"
+    "只要延續的主題是法遵，一律 legal_question。\n"
+    "- out_of_scope：與法遵無關的請求——翻譯、算數／數學、寫程式、創作、閒聊、"
+    "一般知識問答等。**即使出現在多輪對話中間，與法遵無關就是 out_of_scope**"
+    "（例：前輪在談個資法，本輪「幫我把公司治理翻譯成英文」→ out_of_scope）。\n"
+    "邊界（防誤殺）：法遵問題**夾帶**外文用語或數字換算，仍是 legal_question——"
+    "只有「純粹的翻譯／計算服務」才是 out_of_scope。\n"
+    "範例：『你能回答什麼？』→ meta_capability；『個資法第6條規定什麼？』→ legal_question；"
+    "『好啊，請幫我生成對照表』（前輪為法遵回答）→ legal_question；"
+    "『個資法第6條的官方英譯怎麼說？』→ legal_question（法遵題夾外文）；"
+    "『罰鍰上限 30 萬、違規 3 次最多罰多少？』→ legal_question（法遵題夾計算）；"
+    "『幫我算 1234×5678』→ out_of_scope；『翻譯成英文』→ out_of_scope。"
 )
+
+INTENT_VALUES = ["meta_capability", "legal_question", "out_of_scope"]
 
 _INTENT_SCHEMA = {
     "type": "json_schema", "name": "intent", "strict": True,
     "schema": {"type": "object",
-               "properties": {"intent": {"type": "string", "enum": ["meta_capability", "legal_question"]}},
+               "properties": {"intent": {"type": "string", "enum": INTENT_VALUES}},
                "required": ["intent"], "additionalProperties": False},
 }
 
@@ -67,24 +80,35 @@ def _parse_intent(output_text):
         intent = data.get("intent")
     except (json.JSONDecodeError, TypeError, AttributeError):
         return "legal_question"
-    return intent if intent in ("meta_capability", "legal_question") else "legal_question"
+    return intent if intent in INTENT_VALUES else "legal_question"
 
 
-def classify_intent(client, question, *, model):
-    """同步：structured output 分類。壞掉 → legal_question（不退化既有行為）。"""
+def _intent_kwargs(question, *, model, previous_response_id):
+    kwargs = {"model": model, "instructions": INTENT_INSTRUCTIONS,
+              "input": question, "text": {"format": _INTENT_SCHEMA}}
+    if previous_response_id:
+        # 延續輪：fork 主對話鏈讓 classifier 看見脈絡（官方文件：instructions 不繼承、
+        # fork 不污染主鏈）；store=False——葉節點無人接鏈，不入庫。
+        kwargs["previous_response_id"] = previous_response_id
+        kwargs["store"] = False
+    return kwargs
+
+
+def classify_intent(client, question, *, model, previous_response_id=None):
+    """同步：structured output 三類分類（每輪都跑）。壞掉 → legal_question（不退化）。"""
     try:
-        resp = client.responses.create(model=model, instructions=INTENT_INSTRUCTIONS,
-                                       input=question, text={"format": _INTENT_SCHEMA})
+        resp = client.responses.create(
+            **_intent_kwargs(question, model=model, previous_response_id=previous_response_id))
     except Exception:  # noqa: BLE001 分類失敗不可拖垮主問答
         return "legal_question"
     return _parse_intent(getattr(resp, "output_text", ""))
 
 
-async def aclassify_intent(client, question, *, model):
+async def aclassify_intent(client, question, *, model, previous_response_id=None):
     """非同步版（AsyncOpenAI）。"""
     try:
-        resp = await client.responses.create(model=model, instructions=INTENT_INSTRUCTIONS,
-                                              input=question, text={"format": _INTENT_SCHEMA})
+        resp = await client.responses.create(
+            **_intent_kwargs(question, model=model, previous_response_id=previous_response_id))
     except Exception:  # noqa: BLE001
         return "legal_question"
     return _parse_intent(getattr(resp, "output_text", ""))

@@ -894,21 +894,40 @@ def test_dual_law_threshold_is_035():
     assert rag.DUAL_LAW_THRESHOLD == 0.35
 
 
-def test_answer_question_followup_skips_intent_gate(monkeypatch):
-    # 多輪修正：延續輪（有 previous_response_id）不再過 intent gate——
-    # 「好啊請幫我生成」這類延續肯定句實測 100% 被誤判 meta_capability 而吐罐頭答案。
+def test_answer_question_followup_gate_runs_with_context(monkeypatch):
+    # 範疇防護：每輪都過 gate（cookbook topical guardrail），延續輪把
+    # previous_response_id 傳給 classifier 看見對話脈絡——「好啊請幫我生成」
+    # 配脈絡分類為 legal_question 照常作答，不再退罐頭、也不再裸奔。
     import app.rag as rag
+    seen = {}
 
-    def _boom(*a, **k):
-        raise AssertionError("延續輪不應呼叫 classify_intent")
+    def fake_intent(client, question, *, model, previous_response_id=None):
+        seen["prid"] = previous_response_id
+        return "legal_question"
 
-    monkeypatch.setattr(rag, "classify_intent", _boom)
+    monkeypatch.setattr(rag, "classify_intent", fake_intent)
     monkeypatch.setattr(rag, "classify_tier", lambda *a, **k: "明文")
     client = _FakeClient(_fake_response())
     out = rag.answer_question(client, "好啊請幫我生成", vector_store_id="vs_1",
                               model="m", previous_response_id="resp_prev")
+    assert seen["prid"] == "resp_prev"                   # gate 有跑且帶脈絡
     assert len(client.vector_stores.search_calls) == 2   # 正常走檢索問答
     assert out["evidence_mode"] != "capability"
+
+
+def test_answer_question_out_of_scope_returns_refusal_without_generation(monkeypatch):
+    # 重現案例：延續輪「幫我翻譯成英文」曾被執行＋掛假引用。
+    # out_of_scope → 確定性拒答模板（不檢索、不生成——拒答交給 LLM 正是假引用病灶）。
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "out_of_scope")
+    client = _FakeClient(_fake_response())
+    out = rag.answer_question(client, "請幫我翻譯成英文", vector_store_id="vs_1",
+                              model="m", previous_response_id="resp_prev")
+    assert out["evidence_mode"] == "out_of_scope"
+    assert "法遵" in out["answer"] or "法規" in out["answer"]
+    assert out["citations"] == [] and out["evidence"] == []
+    assert len(client.vector_stores.search_calls) == 0   # 不檢索
+    assert len(client.responses.calls) == 0              # 不生成（classifier 已被替換）
 
 
 def test_astream_emits_real_stage_events(monkeypatch):
@@ -994,13 +1013,16 @@ def test_build_dual_kwargs_followup_relaxes_citation_lock(monkeypatch):
     assert CONTINUATION_GUIDANCE not in first["instructions"]   # 首輪不附（維持嚴格引用）
 
 
-def test_astream_answer_followup_skips_intent_gate(monkeypatch):
+def test_astream_answer_followup_gate_runs_with_context(monkeypatch):
+    # 範疇防護（async）：延續輪 gate 照跑且帶脈絡；legal_question 照常檢索串流。
     import app.rag as rag
+    seen = {}
 
-    def _boom(*a, **k):
-        raise AssertionError("延續輪不應呼叫 aclassify_intent")
+    async def fake_intent(client, question, *, model, previous_response_id=None):
+        seen["prid"] = previous_response_id
+        return "legal_question"
 
-    monkeypatch.setattr(rag, "aclassify_intent", _boom)
+    monkeypatch.setattr(rag, "aclassify_intent", fake_intent)
     monkeypatch.setattr(rag, "aclassify_tier", lambda *a, **k: _async_return("明文"))
     completed_resp = SimpleNamespace(
         output=[SimpleNamespace(type="message", content=[SimpleNamespace(text="表格", annotations=[])])],
@@ -1016,9 +1038,26 @@ def test_astream_answer_followup_skips_intent_gate(monkeypatch):
         return items
 
     items = asyncio.run(run())
+    assert seen["prid"] == "resp_prev"
     final = [i for i in items if i["type"] == "final"][0]
     assert final["evidence_mode"] != "capability"
     assert len(client.vector_stores.search_calls) == 2
+
+
+def test_astream_answer_out_of_scope_refuses_without_generation(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("out_of_scope"))
+    client = _FakeAsyncClient([])
+
+    async def run():
+        return [it async for it in _astream(client, "幫我算 1234×5678", vector_store_id="vs_1",
+                                            model="m", previous_response_id="resp_prev")]
+
+    items = asyncio.run(run())
+    final = [i for i in items if i["type"] == "final"][0]
+    assert final["evidence_mode"] == "out_of_scope"
+    assert final["citations"] == []
+    assert len(client.responses.calls) == 0       # 不生成
 
 
 def test_answer_question_attaches_tier(monkeypatch):
@@ -1048,3 +1087,66 @@ def test_astream_answer_attaches_tier(monkeypatch):
     items = asyncio.run(run())
     final = [i for i in items if i["type"] == "final"][0]
     assert final["tier"] == "實務見解"
+
+
+# ---- 範疇防護 code review 修正 ----
+def test_astream_meta_survives_retrieval_failure(monkeypatch):
+    # review Important #1：gather fail-fast 會讓 meta/oos 輪被「用不到的檢索」拖死。
+    # meta/oos 用不到檢索結果 → 檢索炸了也要回模板（sync 路本來就如此，兩路一致）。
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("meta_capability"))
+
+    async def boom(*a, **k):
+        raise RuntimeError("vector store down")
+
+    monkeypatch.setattr(rag, "aretrieve_dual", boom)
+    client = _FakeAsyncClient([])
+
+    async def run():
+        return [it async for it in _astream(client, "你能做什麼", vector_store_id="v", model="m")]
+
+    items = asyncio.run(run())
+    final = [i for i in items if i["type"] == "final"][0]
+    assert final["evidence_mode"] == "capability"
+
+
+def test_astream_legal_still_raises_on_retrieval_failure(monkeypatch):
+    # legal 輪維持修改前語意：檢索失敗就失敗（不可默默無 context 作答）。
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
+
+    async def boom(*a, **k):
+        raise RuntimeError("vector store down")
+
+    monkeypatch.setattr(rag, "aretrieve_dual", boom)
+    client = _FakeAsyncClient([])
+
+    async def run():
+        return [it async for it in _astream(client, "個資法?", vector_store_id="v", model="m")]
+
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        asyncio.run(run())
+
+
+def test_parse_dual_second_layer_refusal_drops_evidence():
+    # review Important #2：classifier 漏判時主模型依【服務範疇】拒答——
+    # 拒答不可掛檢索證據面板/缺口橫幅（原 bug 孿生形態）。
+    resp = _msg("這個請求不在本系統服務範圍，我僅能回答台灣法規相關問題。")
+    out = parse_dual_response(resp, _SOURCES)
+    assert out["evidence_mode"] == "out_of_scope"
+    assert out["citations"] == [] and out["evidence"] == []
+
+
+def test_astream_oos_zero_stage_and_parallel_retrieval(monkeypatch):
+    # 固化取捨：oos/meta 輪零 stage 事件；檢索與 gate 平行（白做一次，cookbook 同款）。
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("out_of_scope"))
+    client = _FakeAsyncClient([])
+
+    async def run():
+        return [it async for it in _astream(client, "翻譯", vector_store_id="v", model="m")]
+
+    items = asyncio.run(run())
+    assert all(i["type"] != "stage" for i in items)
+    assert len(client.vector_stores.search_calls) == 2

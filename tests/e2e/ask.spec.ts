@@ -87,6 +87,18 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(answer).not.toContainText("|---");
   });
 
+  test("範疇防護：域外請求顯確定性拒答（無來源、無badge、無缺口橫幅）", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#q").fill("__OOS__ 幫我把公司治理翻譯成英文");
+    await page.locator("#send").click();
+    const answer = page.locator("[data-answer]").last();
+    await expect(answer).toContainText("不在本系統服務範圍");
+    await expect(answer).toContainText("你能做什麼");
+    await expect(page.locator(".src-row")).toHaveCount(0);      // 零引用
+    await expect(page.locator(".tier-badge")).toHaveCount(0);   // 無確定性層級
+    await expect(page.locator("[data-wait]")).toHaveCount(0);   // 等待面板收合
+  });
+
   test("競態：capability 慢於送出時，空狀態不得重注入對話下方", async ({ page }) => {
     // production 冷讀發現：renderStarters await /api/capability 後才 appendChild，
     // 若使用者在 fetch 完成前送出，空狀態會被注入到對話後面。

@@ -108,10 +108,26 @@ async def ask_stream(req: Request):
     meta = "__META__" in question
     gap = "__GAP__" in question
     nocover = "__NOCOVER__" in question  # 語料未涵蓋：無證據、語料未涵蓋層級
+    oos = "__OOS__" in question          # 範疇防護：域外請求 → 確定性拒答（無檢索無生成）
     # 等待UX鉤子：__SLOWGEN__ 把 generating→首 token 拉長到 13s，驗收 >12s 安撫文案＋停止鍵。
     slowgen = "__SLOWGEN__" in question
 
+    # mock 必須離線獨立（python scripts/mock_server.py 的 sys.path 不含 repo 根，
+    # import app.rag 會 500）；字串漂移風險由 e2e 斷言關鍵句「不在本系統服務範圍」覆蓋。
+    OOS_ANSWER = (
+        "這個請求不在本系統服務範圍。我是法遵研究助理，僅能回答台灣法規相關問題"
+        "（條文查詢、義務／罰則對照、合規要件、函釋／判決見解）。\n\n"
+        "請改問法規相關問題，或輸入「你能做什麼」查看完整能力。"
+    )
+
     def gen():
+        if oos:
+            yield "data: " + json.dumps({"type": "delta", "text": OOS_ANSWER}, ensure_ascii=False) + "\n\n"
+            final = {"type": "final", "answer": OOS_ANSWER, "citations": [], "evidence": [],
+                     "evidence_mode": "out_of_scope", "response_id": None, "query_log_id": None}
+            yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
         if nocover:
             ans = ("【語料未涵蓋】本系統語料目前未收錄此主題的條文、函釋或判決，"
                    "無法提供可審查的依據。建議查詢其他法規資料庫或諮詢專業律師。\n\n"
