@@ -439,7 +439,8 @@ function renderEvidence(activeFilename){
     return;
   }
   // 缺口④：誠實標示這批依據是「答案實際引用」還是「檢索參考」
-  const modeLabel = state.lastEvidenceMode === "cited"
+  const isCited = (state.lastEvidenceMode || "").endsWith("cited");
+  const modeLabel = isCited
     ? `<i data-lucide="link" class="icon-xs"></i> 答案引用來源`
     : `<i data-lucide="search" class="icon-xs"></i> 檢索參考（未必逐句引用）`;
   const header = `<div class="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-[var(--ink-50)] font-semibold mb-1">${modeLabel}</div>`;

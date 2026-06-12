@@ -90,7 +90,7 @@ async def ask_stream(req: Request):
                 "| 交易監控 | [^1] |\n"
             )
             final = {"type": "final", "answer": final_answer, "citations": [EVIDENCE[0]["filename"]],
-                     "evidence": [EVIDENCE[0]], "evidence_mode": "cited",
+                     "evidence": [EVIDENCE[0]], "evidence_mode": "dual_cited",
                      "response_id": "resp_mk", "query_log_id": 2}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
             yield "data: [DONE]\n\n"
@@ -107,7 +107,7 @@ async def ask_stream(req: Request):
             time.sleep(0.04)
         if not no_final:
             final = {"type": "final", "answer": ANSWER, "citations": CITES,
-                     "evidence": EVIDENCE, "evidence_mode": "cited",
+                     "evidence": EVIDENCE, "evidence_mode": "dual_cited",
                      "response_id": "resp_mock", "query_log_id": 1}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
         yield "data: [DONE]\n\n"
