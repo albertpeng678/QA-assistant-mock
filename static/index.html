@@ -47,11 +47,13 @@
   .answer-prose ul{ list-style:disc; } .answer-prose ol{ list-style:decimal; }
   .answer-prose li{ margin:.3em 0; padding-left:.15em; }
   .answer-prose li > ul,.answer-prose li > ol{ margin:.3em 0; }
+  /* markdown 語意配色：H2 血紅主結構、H3 深墨次標題（context7/marked：以元素上色）*/
   .answer-prose h1,.answer-prose h2,.answer-prose h3{ font-family:'Fraunces',serif; font-weight:600; line-height:1.35; margin:.6em 0 .2em; }
-  .answer-prose h3{ font-size:1.05em; }
+  .answer-prose h2{ color:var(--blood); }
+  .answer-prose h3{ font-size:1.05em; color:var(--ink-90); }
   .answer-prose strong{ font-weight:600; color:var(--ink); }
-  .answer-prose code{ font-family:ui-monospace,monospace; font-size:.9em; background:var(--ink-08); padding:.1em .35em; border-radius:4px; }
-  .answer-prose blockquote{ border-left:3px solid var(--ink-20); padding-left:.9em; color:var(--ink-70); }
+  .answer-prose code{ font-family:ui-monospace,monospace; font-size:.9em; background:var(--ink-08); color:var(--blood); padding:.1em .35em; border-radius:4px; }
+  .answer-prose blockquote{ border-left:3px solid var(--blood); padding-left:.9em; color:var(--ink-70); font-style:italic; }
   .answer-prose sup a{ color:var(--blood); font-weight:700; text-decoration:none; font-size:.7em; padding:0 1px; }
   .cite-ref:focus-visible{ outline:2px solid var(--blood); outline-offset:2px; border-radius:3px; }
 
@@ -66,13 +68,13 @@
   /* —— 缺口⑤：保留法條原始換行/縮排結構 —— */
   .legal-pre{ white-space:pre-wrap; word-break:break-word; }
 
-  /* —— 缺口⑦：確定性層級標籤（嚴守三色，靠墨/血濃淡區分強調）—— */
+  /* —— 缺口⑦：確定性層級標籤（填色 chip：墨／teal／amber／灰，2 低飽和輔色經使用者核可）—— */
   .tier{ display:inline-block; font-family:'Public Sans'; font-size:.74em; font-weight:700;
-         padding:.05em .5em; border-radius:5px; margin-right:.3em; border:1px solid var(--ink-20); }
-  .tier-explicit{ color:var(--ink-90); border-color:var(--ink-35); }
-  .tier-interpret{ color:var(--blood); border-color:#7a2e2e55; }
-  .tier-practice{ color:var(--ink-70); }
-  .tier-gap{ color:var(--paper); background:var(--blood); border-color:var(--blood); }
+         padding:.1em .6em; border-radius:11px; margin-right:.35em; color:var(--paper); }
+  .tier-explicit{ background:var(--ink); }       /* 明文：墨 */
+  .tier-interpret{ background:#2e5a52; }          /* 解釋/裁量：teal */
+  .tier-practice{ background:#8a5a12; }           /* 實務見解：amber */
+  .tier-gap{ background:var(--ink-50); }          /* 語料未涵蓋：灰 */
 
   /* —— 串流游標 —— */
   .stream-caret::after{ content:'▍'; color:var(--blood); animation:blink 1s steps(2) infinite; margin-left:1px; }
@@ -93,6 +95,14 @@
          color:var(--blood); border-radius:16px; padding:6px 13px; font-size:13px; cursor:pointer;
          transition:background .15s,transform .1s; font-family:'Public Sans'; box-shadow:var(--shadow-sm); }
   .chip:hover{ background:#7a2e2e0d; } .chip:active{ transform:scale(.97); }
+
+  /* 空狀態方向2：領域 tag + 範例題 */
+  .dom-tag{ font-family:'Public Sans'; font-size:13px; font-weight:600; border:1px solid var(--ink-20);
+            color:var(--ink-70); border-radius:14px; padding:6px 13px; background:var(--surface); cursor:pointer; transition:all .15s; }
+  .dom-tag:hover{ border-color:#7a2e2e55; } .dom-tag.on{ border-color:var(--blood); color:var(--blood); background:#7a2e2e0d; }
+  .exq{ font-family:'Spectral',serif; font-size:13px; color:var(--ink); border:1px solid #7a2e2e33; border-radius:10px;
+        padding:10px 12px; background:var(--surface); box-shadow:var(--shadow-sm); cursor:pointer; transition:border-color .15s; line-height:1.5; }
+  .exq:hover{ border-color:#7a2e2e66; }
 
   .src-row{ display:flex; align-items:center; gap:9px; background:var(--surface); border:1px solid var(--ink-12);
             border-radius:8px; padding:8px 12px; cursor:pointer; transition:border-color .15s; box-shadow:var(--shadow-sm); }
@@ -213,18 +223,45 @@ function renderStream(el, fullText){
 }
 const icons = () => lucide.createIcons();
 
-/* —— 渲染 starter chips（空狀態） —— */
-function renderStarters(){
+/* —— 空狀態（方向2：漸進揭露）：領域 tag →（點）範例問題 —— */
+const DOMAIN_EXAMPLES = {
+  "個資": ["個資外洩要通報誰？期限多久？", "如何合法蒐集員工個資？", "違反個資法的罰則有哪些？"],
+  "勞動": ["資遣費如何計算？", "加班費怎麼算？", "競業禁止條款有效嗎？"],
+  "公司治理": ["內線交易何時可買賣股票？", "獨立董事有哪些義務？", "董事競業禁止規範？"],
+  "公平交易": ["不實廣告的法律責任？", "聯合行為如何認定？"],
+  "營業秘密": ["員工帶走客戶名單怎麼辦？", "營業秘密的保護要件？"],
+  "消費者保護": ["定型化契約無效要件？", "網購七天鑑賞期適用範圍？"],
+  "洗錢防制": ["客戶盡職調查（KYC）要做到什麼程度？", "可疑交易申報門檻？"],
+};
+
+async function renderStarters(){
+  let manifest = state.capabilityManifest;
+  if(!manifest){ try{ const r = await fetch("/api/capability"); if(r.ok){ manifest = await r.json(); state.capabilityManifest = manifest; } }catch{} }
+  manifest = manifest || {};
+  const cats = (manifest.categories && manifest.categories.length) ? manifest.categories : Object.keys(DOMAIN_EXAMPLES);
+  const dc = manifest.doc_type_counts || {};
+  const scope = ["法條","施行細則","函釋","FAQ","判決"].filter(k=>dc[k]).join("・") || "法條・函釋・FAQ・判決";
   const box = document.createElement("div");
-  box.className = "text-center py-10";
+  box.className = "text-center py-8";
   box.innerHTML = `
-    <div class="font-display text-[22px] font-semibold mb-1">企業法遵研究助理</div>
-    <p class="font-body text-[15px] text-[var(--ink-70)] mb-6">以法規語料問答，附條文引用與可審查的引證依據</p>
-    <div class="flex flex-wrap justify-center gap-2 max-w-xl mx-auto">
-      ${STARTERS.map(s=>`<button class="chip starter" data-q="${s.replace(/"/g,'&quot;')}"><i data-lucide="sparkles" class="icon-xs"></i>${s}</button>`).join("")}
+    <div>
+      <div class="font-display text-[22px] font-semibold mb-2" style="white-space:nowrap">企業法遵研究助理</div>
+      <p class="font-body text-[14px] text-[var(--ink-70)] mb-5 max-w-md mx-auto" style="line-height:1.75">點一個領域看範例問題，或直接輸入。涵蓋 ${scope} 等。</p>
+      <div id="dom-tags" class="flex flex-wrap justify-center gap-2 max-w-xl mx-auto"></div>
+      <div id="dom-reveal" class="max-w-md mx-auto mt-4 text-left"></div>
     </div>`;
   thread.appendChild(box);
-  box.querySelectorAll(".starter").forEach(b=> b.addEventListener("click", ()=> submit(b.dataset.q)));
+  const tagsEl = box.querySelector("#dom-tags"), revealEl = box.querySelector("#dom-reveal");
+  tagsEl.innerHTML = cats.map((c,i)=>`<button class="dom-tag${i===0?" on":""}" data-dom="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("");
+  const showDomain = (dom)=>{
+    tagsEl.querySelectorAll(".dom-tag").forEach(t=> t.classList.toggle("on", t.dataset.dom===dom));
+    const qs = DOMAIN_EXAMPLES[dom] || [];
+    revealEl.innerHTML = `<div class="text-[10px] font-bold uppercase tracking-wide text-[var(--blood)] mb-2">${escapeHtml(dom)} — 範例問題</div>` +
+      qs.map(q=>`<button class="exq starter block w-full text-left mb-2" data-q="${q.replace(/"/g,"&quot;")}">${escapeHtml(q)}</button>`).join("");
+    revealEl.querySelectorAll(".starter").forEach(b=> b.addEventListener("click", ()=> submit(b.dataset.q)));
+  };
+  tagsEl.querySelectorAll(".dom-tag").forEach(t=> t.addEventListener("click", ()=> showDomain(t.dataset.dom)));
+  if(cats.length) showDomain(cats[0]);
   icons();
 }
 
@@ -354,6 +391,16 @@ function finalizeAnswer(ui, question, answerText, evt){
   // final：以後端 parse 後的權威答案渲染（已把 inline 引用標記轉成腳註 [^N]，依據欄不再空）；
   // 僅在降級/無 final 時才退回串流累積的原文。
   ui.answerEl.innerHTML = md(evt.answer != null ? evt.answer : answerText);
+
+  // 缺口提示：dual_retrieved 且有檢索到參考條文時，誠實標示超出精準涵蓋範圍
+  // （完全無證據＝語料未涵蓋，靠答案內【語料未涵蓋】層級表達，不在此重複提示）
+  if((evt.evidence_mode || "") === "dual_retrieved" && (evt.evidence || []).length){
+    const g = document.createElement("p");
+    g.className = "text-[12px] mb-2 px-3 py-2 rounded-lg";
+    g.style.cssText = "color:var(--blood); background:#7a2e2e10; border:1px solid #7a2e2e2e; line-height:1.6";
+    g.textContent = "本題超出語料直接涵蓋範圍，以下依相關度排列參考條文，未必逐句對應；建議查閱判決資料庫或諮詢法律顧問。";
+    ui.answerEl.before(g);
+  }
 
   // 誠實提示：回答被截斷（撞長度上限）或連線中斷導致不完整——法遵工具不可讓人誤以為是完整答案。
   if(evt.truncated || evt.partial){
