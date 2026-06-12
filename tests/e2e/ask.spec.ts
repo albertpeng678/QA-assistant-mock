@@ -204,4 +204,40 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(page.locator("#offcanvas")).toHaveClass(/open/);
     await expect(page.locator(".evi-card.active")).toContainText("第12條");
   });
+
+  test("空狀態漸進揭露：領域 tag 點擊揭露範例問題", async ({ page }) => {
+    await page.goto("/");
+    const tags = page.locator("#dom-tags .dom-tag");
+    await expect(tags.first()).toBeVisible();
+    expect(await tags.count()).toBeGreaterThanOrEqual(5);
+    // 預設展開第一個領域的範例
+    await expect(page.locator("#dom-reveal .exq").first()).toBeVisible();
+    // 點另一個領域，範例更新
+    await tags.nth(1).click();
+    await expect(page.locator("#dom-reveal .exq").first()).toBeVisible();
+  });
+
+  test("能力回答：問你能做什麼，顯涵蓋語料與不能做、不檢索", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#q").fill("你能做什麼 __META__");
+    await page.locator("#ask-form button[type=submit]").click();
+    const ans = page.locator("[data-answer]").last();
+    await expect(ans).toContainText("涵蓋語料");
+    await expect(ans).toContainText("不能");
+  });
+
+  test("缺口提示：dual_retrieved 且有條文時顯示超出涵蓋範圍", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#q").fill("冷門問題 __GAP__");
+    await page.locator("#ask-form button[type=submit]").click();
+    await expect(page.getByText("本題超出語料直接涵蓋範圍")).toBeVisible();
+  });
+
+  test("語料未涵蓋：完全無證據時顯【語料未涵蓋】層級、不顯缺口提示", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#q").fill("外太空法律 __NOCOVER__");
+    await page.locator("#ask-form button[type=submit]").click();
+    await expect(page.locator("[data-answer]").last()).toContainText("未收錄此主題");
+    await expect(page.getByText("本題超出語料直接涵蓋範圍")).toHaveCount(0);
+  });
 });
