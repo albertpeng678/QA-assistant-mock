@@ -133,6 +133,6 @@ async def aclassify_tier(client, question, context, *, model):
     try:
         resp = await client.responses.create(model=model, instructions=TIER_INSTRUCTIONS,
                                               input=_tier_input(question, context), text={"format": _TIER_SCHEMA})
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 分類失敗不可拖垮主問答
         return "語料未涵蓋"
     return _parse_tier(getattr(resp, "output_text", ""))

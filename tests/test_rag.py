@@ -842,3 +842,23 @@ def test_answer_question_attaches_tier(monkeypatch):
     client = _FakeClient(_fake_response())
     out = rag.answer_question(client, "個資外洩?", vector_store_id="vs_1", model="m")
     assert out["tier"] == "明文"
+
+
+def test_astream_answer_attaches_tier(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
+    monkeypatch.setattr(rag, "aclassify_tier", lambda *a, **k: _async_return("實務見解"))
+    delta = SimpleNamespace(type="response.output_text.delta", delta="文字")
+    completed_resp = SimpleNamespace(
+        output=[SimpleNamespace(type="message", content=[SimpleNamespace(text="文字", annotations=[])])],
+        id="r", usage=None, status="completed", incomplete_details=None)
+    completed = SimpleNamespace(type="response.completed", response=completed_resp)
+    client = _FakeAsyncClient([delta, completed])
+    async def run():
+        items = []
+        async for it in rag.astream_answer(client, "q", vector_store_id="vs_1", model="m"):
+            items.append(it)
+        return items
+    items = asyncio.run(run())
+    final = [i for i in items if i["type"] == "final"][0]
+    assert final["tier"] == "實務見解"
