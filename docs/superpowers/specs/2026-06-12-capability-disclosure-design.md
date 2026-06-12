@@ -85,7 +85,7 @@ _INTENT_SCHEMA = {"type":"json_schema","name":"intent","strict":True,"schema":{
 **真實版面前提（務必遵守）**：現有 `static/index.html` 為**全裝置單欄置中**（`#thread.max-w-3xl.mx-auto`）、**無任何 `@media` 斷點**；頂列 ink 深色 header 含左側 hamburger（`#ham`）；證據面板是**左滑 offcanvas 抽屜**（`#offcanvas`，桌機 340px／手機 `max-86vw`），非常駐側欄。空狀態現為 `.chip.starter` 血框 pill。**所有新 UI 必須沿用此真實結構與既有 class/設計 token（ink/paper/blood＋低飽和輔色），不得新增側欄或 media query。**
 
 **六個狀態（mockup 已核可）：**
-1. **空狀態**：`#thread` 內 — 開場一句範疇（讀 `/api/capability`）＋ 6 個領域能力卡（CSS grid，桌機 3 欄／窄屏自然降為 2／1 欄），每卡 1 個可點範例問題（NN/g：可點、具體、貼近輸入）。沿用現有 `renderStarters` 進入點改為渲染領域卡。
+1. **空狀態（方向 2：漸進揭露，已核可）**：`#thread` 內 — 標題（手機**單行**，`white-space:nowrap`＋縮字級）＋ 開場一句範疇（讀 `/api/capability`）＋ **7 個緊湊領域 tag**（個資／勞動／公司治理／公平交易／營業秘密／消費者保護／洗錢防制，flex-wrap，全領域一眼可見）。點一個 tag → 下方揭露該領域 **2–3 個可點範例問題**（NN/g：progressive disclosure〈Guideline 6〉＋ ChatGLM Inspiration Center 分類；可點按鈕非文字）。預設展開第一個領域。沿用現有 `renderStarters` 進入點改寫為此 tag→reveal 結構。**不用大卡片**（實測太佔空間／太密集，違反 NN/g 留白）。
 2. **能力回答**：`meta_capability` 答案以一般 message 渲染在 `#thread`（能幫你的／涵蓋語料／不能做／免責），套用 markdown 語意配色；不顯示引證計數徽章。
 3. **一般答案 + markdown 語意配色**：見 §4.5；現有問答一併套用。
 4. **缺口提示**：見 §4.3，`dual_retrieved` 時答案頂部插一行。
@@ -108,6 +108,11 @@ marked custom renderer 給元素掛 class（或直接以 `.answer-prose` 元素�
 | 確定性層級（既有 tierTags） | 明文=墨／解釋裁量=teal `#2e5a52`／實務見解=amber `#8a5a12`／未涵蓋=灰 |
 
 > renderer 掛的 class 須在 DOMPurify allowlist 內（既有已 sanitize；class 屬性預設保留）。
+
+### 4.6 行距與留白（NN/g/WCAG 依據，套用所有答案）
+- 答案本文 `line-height: **1.65**`（≥1.5 floor，WCAG 1.4.12）；段間距 `margin-bottom: **1.4em**`（趨近 2×字級）；清單項間距加大（`li margin .45em`）。
+- 標題 `line-height 1.3`（緊湊不鬆散）；空狀態 lede `line-height 1.75`（較 airy）。
+- 間距採 **8px 尺標**（8/16/24/32/48）；空狀態大留白（NN/g〈Why Does a Design Look Good?〉：減少元素、加大 padding、刻意佔位）。
 
 ## 5. 測試策略
 
