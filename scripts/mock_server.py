@@ -47,6 +47,20 @@ EVIDENCE = [
 ]
 CITES = [e["filename"] for e in EVIDENCE]
 
+# 職能揭露 mock：能力清單 + 能力回答 + 缺口答案
+CAPABILITY = {"doc_type_counts": {"法條": 1163, "施行細則": 197, "函釋": 666, "FAQ": 169, "判決": 106},
+              "categories": ["個資", "勞動", "公司治理", "公平交易", "營業秘密", "消費者保護", "洗錢防制"],
+              "cutoff": "2026-06", "total": 2301}
+META_ANSWER = (
+    "## 我能幫你的\n條文查詢與解釋、義務／罰則對照、合規要件檢核、實務見解佐證（函釋・判決）。\n\n"
+    "## 涵蓋語料（皆真實官方開放資料）\n"
+    "**文件型別**：法條 1,163・施行細則 197・函釋 666・FAQ 169・判決 106\n\n"
+    "**法令領域**：個資・勞動・公司治理・公平交易・營業秘密・消費者保護・洗錢防制\n\n"
+    "## 我不能做（請另尋專業）\n提供正式法律意見、代理訴訟、個案金額試算、最新即時判決。\n\n"
+    "本回答為研究輔助，非正式法律意見。"
+)
+GAP_ANSWER = "【明文】個資法第48條規定屆期未改正得按次處罰鍰，惟具體抗辯須視個案事實而定…"
+
 
 @app.get("/")
 def index():
@@ -56,6 +70,11 @@ def index():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/capability")
+def capability():
+    return CAPABILITY
 
 
 @app.post("/api/ask/stream")
@@ -72,8 +91,28 @@ async def ask_stream(req: Request):
     # delta 串流帶 PUA 標記、但 final.answer 為後端轉好的腳註版，驗收前端「最終以 evt.answer 渲染、
     # 依據欄不空、標記轉成可點腳註」。
     markers = "__MARKERS__" in question
+    # 職能揭露鉤子：__META__ 能力回答（capability 模式、不檢索）；__GAP__ 缺口提示（dual_retrieved）。
+    meta = "__META__" in question
+    gap = "__GAP__" in question
 
     def gen():
+        if meta:
+            yield "data: " + json.dumps({"type": "delta", "text": META_ANSWER}, ensure_ascii=False) + "\n\n"
+            final = {"type": "final", "answer": META_ANSWER, "citations": [], "evidence": [],
+                     "evidence_mode": "capability", "response_id": "resp_meta", "query_log_id": None}
+            yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        if gap:
+            for ch in [GAP_ANSWER[i:i+12] for i in range(0, len(GAP_ANSWER), 12)]:
+                yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
+                time.sleep(0.02)
+            final = {"type": "final", "answer": GAP_ANSWER, "citations": [EVIDENCE[0]["filename"]],
+                     "evidence": [EVIDENCE[0]], "evidence_mode": "dual_retrieved",
+                     "response_id": "resp_gap", "query_log_id": 3}
+            yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
         if markers:
             CITE = "fileciteturn0file0"  # 模擬 OpenAI inline 引用標記
             stream_text = (
