@@ -699,6 +699,20 @@ def test_build_context_block_preserves_url_when_present():
     assert sources[0]["url"] == "https://x"
 
 
+def test_build_context_block_dedupes_same_filename_keeps_best():
+    # 真實情況（個資外洩題實測）：判決路同一份判決回多個 chunk，
+    # 不應變成多個來源 / 重複 citations；同檔留最高分 chunk、只產一個 [來源N]。
+    judgment = [
+        _r("臺北高等行政法院-判決-個資.txt", "段落一（較低分）", 0.40, "判決"),
+        _r("臺北高等行政法院-判決-個資.txt", "段落二（最高分）", 0.55, "判決"),
+        _r("臺北高等行政法院-判決-個資.txt", "段落三", 0.45, "判決"),
+    ]
+    context, sources = build_context_block([], judgment)
+    assert [s["filename"] for s in sources] == ["臺北高等行政法院-判決-個資.txt"]
+    assert sources[0]["text"] == "段落二（最高分）"  # 留最高分 chunk，不只留首筆
+    assert context.count("[來源") == 1
+
+
 def test_result_text_empty_content_falls_back_to_text():
     from app.rag import _result_text
     r = SimpleNamespace(content=[], text="後備文字")

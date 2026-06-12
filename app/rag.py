@@ -359,14 +359,40 @@ def _result_doc_type(r):
     return getattr(attrs, "doc_type", None) if attrs else None
 
 
+def _dedupe_results(results, seen):
+    """同檔名只留分數最高的一筆 search result，保留首見順序；seen 跨區段累積。
+
+    判決路常對同一份判決回多個 chunk（實測：個資外洩題同檔 ×3），若每個 chunk 各成
+    一個 [來源N]，citations/來源列就會出現重複檔名。在組 context 前先按檔名去重，使
+    [來源N]、evidence、citations 天生唯一，並避免餵模型多份重複判決。
+    """
+    best = {}
+    order = []
+    for r in results:
+        fn = getattr(r, "filename", None) or ""
+        if fn in seen:
+            continue
+        if fn not in best:
+            best[fn] = r
+            order.append(fn)
+        elif (getattr(r, "score", None) or 0) > (getattr(best[fn], "score", None) or 0):
+            best[fn] = r
+    seen.update(order)
+    return [best[fn] for fn in order]
+
+
 def build_context_block(law, judgment):
     """把雙路檢索結果組成「給模型讀」的 context 字串，並回確定性的 sources 清單。
 
     回 (context_str, sources)；sources 依【法規依據】→【判決見解】序號排列，
     每筆 {filename, text, score, doc_type, url?}，供 parse_dual_response 組 citations/evidence。
+    同檔名多 chunk 先去重（留最高分），避免來源列／citations 重複。
     """
     sources = []
     lines = []
+    seen = set()
+    law = _dedupe_results(law, seen)
+    judgment = _dedupe_results(judgment, seen)
 
     def add_section(title, results):
         if not results:
