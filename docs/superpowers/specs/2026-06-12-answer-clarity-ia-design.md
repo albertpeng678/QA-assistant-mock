@@ -58,7 +58,7 @@ _MODEL_PARAMS = {"reasoning": {"effort": "low"},
    - 不採「表格→卡片堆疊」（需 media query + 複雜 CSS,較重）。context7 來源:`/websites/v3_tailwindcss` overflow / breakpoints。
    - 屬**前端**（marked renderer + CSS,走 live demo gate）。
 4. **兩維度分離**：badge = 確定性層級（明文/解釋裁量/實務見解）;**scope/coverage（已收錄 vs 語料未收錄 vs 法律未明文）另以 meta 提示表達**,不擠進同一 enum。`classify_tier` enum 含 `語料未涵蓋` 以涵蓋「未收錄」。
-5. **caveat 隔離**：免責聲明與不確定性以 blockquote/callout **視覺隔離**置於答案末端 meta 區,不混進內容流。
+5. **caveat 隔離**（mockup 已核可樣式）：免責聲明與不確定性置於答案末端 meta 區、視覺隔離。**樣式：淡底 `#7a2e2e0a` + 細框 `--ink-12` + 圓角的軟盒,前綴小標「提醒」;不可用左側鑲邊（blockquote 左槓）—— 使用者明確不要左槓。** 與既有缺口提示同一視覺語言。
 6. **關鍵數字強調一次**：BLUF 的關鍵數字/期限用 `**粗體**`,全答案僅一處主焦點（勿重複稀釋）。
 7. **可驗證閱讀程度**：平均句長 ≤30 字、術語首見必括號白話、避免連續名詞堆疊——列入 cold-read 驗收清單。
 8. **（後續）側欄來源分組/限縮**：來源過多時按 doc_type 分組或顯 top-N（非本次必做,記著）。
