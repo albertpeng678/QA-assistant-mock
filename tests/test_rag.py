@@ -689,3 +689,11 @@ def test_parse_dual_drops_out_of_range_marker():
     assert "[^" not in out["answer"]
     assert "[來源9]" not in out["answer"]
     assert out["evidence_mode"] == "dual_retrieved"
+
+
+def test_parse_dual_repeated_marker_reuses_footnote():
+    resp = _msg("先講[來源1]，再補充[來源1]，最後[來源2]。")
+    out = parse_dual_response(resp, _SOURCES)
+    assert out["answer"].count("[^1]") == 2      # 同來源重複引用 → 同腳註號
+    assert "[^2]" in out["answer"]
+    assert out["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-資遣費案.txt"]

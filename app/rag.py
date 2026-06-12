@@ -412,7 +412,7 @@ def parse_dual_response(response, sources):
     if cited_idx:
         answer_text = linked
         evidence = [dict(sources[i]) for i in cited_idx]
-        citations = [sources[i]["filename"] for i in cited_idx]
+        citations = [e["filename"] for e in evidence]
         evidence_mode = "dual_cited"
     else:
         answer_text = _strip_citation_markers(linked)
