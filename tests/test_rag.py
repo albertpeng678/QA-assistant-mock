@@ -322,9 +322,24 @@ class _FakeAsyncResponses:
         return _FakeAsyncStream(self._events)
 
 
+class _FakeAsyncVS:
+    def __init__(self):
+        self.search_calls = []
+
+    async def search(self, **kwargs):
+        self.search_calls.append(kwargs)
+        is_j = (kwargs.get("filters") or {}).get("type") == "eq"
+        dt = "判決" if is_j else "法條"
+        fn = "臺北地院-判決-案.txt" if is_j else "勞動基準法-第24條.txt"
+        return SimpleNamespace(data=[SimpleNamespace(
+            filename=fn, score=0.6, attributes={"doc_type": dt},
+            content=[SimpleNamespace(type="text", text=f"{dt}內容")])])
+
+
 class _FakeAsyncClient:
     def __init__(self, events):
         self.responses = _FakeAsyncResponses(events)
+        self.vector_stores = _FakeAsyncVS()
 
 
 def _drain_async(agen):
@@ -727,47 +742,6 @@ def test_parse_dual_repeated_marker_reuses_footnote():
 # ---- (L) 串流走雙路：先檢索組 context，再串流；final 由 parse_dual_response 組 ----
 import asyncio as _asyncio
 from app.rag import astream_answer as _astream, aretrieve_dual
-
-
-class _FakeAsyncVS:
-    def __init__(self):
-        self.search_calls = []
-
-    async def search(self, **kwargs):
-        self.search_calls.append(kwargs)
-        is_j = (kwargs.get("filters") or {}).get("type") == "eq"
-        dt = "判決" if is_j else "法條"
-        fn = "臺北地院-判決-案.txt" if is_j else "勞動基準法-第24條.txt"
-        return SimpleNamespace(data=[SimpleNamespace(
-            filename=fn, score=0.6, attributes={"doc_type": dt},
-            content=[SimpleNamespace(type="text", text=f"{dt}內容")])])
-
-
-class _FakeAsyncStream:
-    def __init__(self, events):
-        self._events = events
-
-    def __aiter__(self):
-        async def gen():
-            for e in self._events:
-                yield e
-        return gen()
-
-
-class _FakeAsyncResponses:
-    def __init__(self, events):
-        self._events = events
-        self.calls = []
-
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
-        return _FakeAsyncStream(self._events)
-
-
-class _FakeAsyncClient:
-    def __init__(self, events):
-        self.responses = _FakeAsyncResponses(events)
-        self.vector_stores = _FakeAsyncVS()
 
 
 def test_aretrieve_dual_awaits_two_routes():
