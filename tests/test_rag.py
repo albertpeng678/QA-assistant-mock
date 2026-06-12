@@ -373,11 +373,12 @@ def test_astream_answer_yields_deltas_then_final(monkeypatch):
         astream_answer(client, "個資外洩?", vector_store_id="vs_1", model="gpt-5.4-mini")
     )
 
-    assert events[0] == {"type": "delta", "text": "部分"}
-    assert events[1] == {"type": "delta", "text": "答案"}
-    assert events[2]["type"] == "final"
+    flow = [e for e in events if e["type"] != "stage"]   # 階段事件另測，此處驗 delta→final
+    assert flow[0] == {"type": "delta", "text": "部分"}
+    assert flow[1] == {"type": "delta", "text": "答案"}
+    assert flow[2]["type"] == "final"
     # 雙路後 citations 來自 sources（_FakeAsyncVS 回傳）：法條路 + 判決路各一筆
-    assert events[2]["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-案.txt"]
+    assert flow[2]["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-案.txt"]
     assert client.responses.calls[0]["stream"] is True
     assert client.responses.calls[0]["reasoning"] == {"effort": "low"}
 
@@ -701,7 +702,7 @@ def test_build_context_block_preserves_url_when_present():
 
 def test_build_context_block_dedupes_same_filename_keeps_best():
     # 真實情況（個資外洩題實測）：判決路同一份判決回多個 chunk，
-    # 不應變成多個來源 / 重複 citations；同檔留最高分 chunk、只產一個 [來源N]。
+    # 不應變成多個來源 / 重複 citations；同檔合併為單一 [來源N]、最高分 chunk 領頭。
     judgment = [
         _r("臺北高等行政法院-判決-個資.txt", "段落一（較低分）", 0.40, "判決"),
         _r("臺北高等行政法院-判決-個資.txt", "段落二（最高分）", 0.55, "判決"),
@@ -709,8 +710,25 @@ def test_build_context_block_dedupes_same_filename_keeps_best():
     ]
     context, sources = build_context_block([], judgment)
     assert [s["filename"] for s in sources] == ["臺北高等行政法院-判決-個資.txt"]
-    assert sources[0]["text"] == "段落二（最高分）"  # 留最高分 chunk，不只留首筆
+    assert sources[0]["text"].startswith("段落二（最高分）")  # 最高分 chunk 領頭
+    assert sources[0]["score"] == 0.55
     assert context.count("[來源") == 1
+
+
+def test_build_context_block_merges_top2_chunks_per_file():
+    # 去重副作用修正：同檔不只留 1 個 chunk——合併前 2 高分 chunk 進同一個來源，
+    # 兼顧「來源／citations 唯一」與「長判決 context 豐富度」。第 3 名以後捨棄。
+    judgment = [
+        _r("臺北高等行政法院-判決-個資.txt", "段落一（第三名）", 0.40, "判決"),
+        _r("臺北高等行政法院-判決-個資.txt", "段落二（最高分）", 0.55, "判決"),
+        _r("臺北高等行政法院-判決-個資.txt", "段落三（次高分）", 0.45, "判決"),
+    ]
+    context, sources = build_context_block([], judgment)
+    assert len(sources) == 1
+    assert "段落二（最高分）" in sources[0]["text"]
+    assert "段落三（次高分）" in sources[0]["text"]      # 第 2 名也進 context
+    assert "段落一（第三名）" not in sources[0]["text"]  # 第 3 名捨棄
+    assert context.count("[來源") == 1                   # 仍只有一個來源編號
 
 
 def test_result_text_empty_content_falls_back_to_text():
@@ -847,6 +865,140 @@ def test_answer_question_legal_uses_retrieval(monkeypatch):
 def test_verbosity_is_low():
     from app.rag import _MODEL_PARAMS
     assert _MODEL_PARAMS["text"]["verbosity"] == "low"
+
+
+def test_dual_law_threshold_is_035():
+    # 召回修正：法條路 0.5 硬門檻把臨界相關文件（實測 0.45–0.49）整批切掉，
+    # 退化成 gap 答案。降至 0.35 與判決路對稱；好查詢 top-12 早被高分塞滿不受影響。
+    import app.rag as rag
+    assert rag.DUAL_LAW_THRESHOLD == 0.35
+
+
+def test_answer_question_followup_skips_intent_gate(monkeypatch):
+    # 多輪修正：延續輪（有 previous_response_id）不再過 intent gate——
+    # 「好啊請幫我生成」這類延續肯定句實測 100% 被誤判 meta_capability 而吐罐頭答案。
+    import app.rag as rag
+
+    def _boom(*a, **k):
+        raise AssertionError("延續輪不應呼叫 classify_intent")
+
+    monkeypatch.setattr(rag, "classify_intent", _boom)
+    monkeypatch.setattr(rag, "classify_tier", lambda *a, **k: "明文")
+    client = _FakeClient(_fake_response())
+    out = rag.answer_question(client, "好啊請幫我生成", vector_store_id="vs_1",
+                              model="m", previous_response_id="resp_prev")
+    assert len(client.vector_stores.search_calls) == 2   # 正常走檢索問答
+    assert out["evidence_mode"] != "capability"
+
+
+def test_astream_emits_real_stage_events(monkeypatch):
+    # 等待UX（NN/g）：階段列必須掛真實管線事件，不演戲——
+    # retrieving（進檢索）→ retrieved（含兩路實數）→ generating（串流建立）→ delta。
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
+    monkeypatch.setattr(rag, "aclassify_tier", lambda *a, **k: _async_return("明文"))
+    delta = SimpleNamespace(type="response.output_text.delta", delta="文字")
+    completed_resp = SimpleNamespace(
+        output=[SimpleNamespace(type="message", content=[SimpleNamespace(text="文字", annotations=[])])],
+        id="r", usage=None, status="completed", incomplete_details=None)
+    completed = SimpleNamespace(type="response.completed", response=completed_resp)
+    client = _FakeAsyncClient([delta, completed])
+
+    async def run():
+        return [it async for it in _astream(client, "加班費?", vector_store_id="vs_1", model="m")]
+
+    items = asyncio.run(run())
+    assert items[0] == {"type": "stage", "stage": "retrieving"}
+    retrieved = next(i for i in items if i.get("stage") == "retrieved")
+    assert retrieved["law_count"] == 1 and retrieved["judgment_count"] == 1   # FakeVS 兩路各 1
+    gen_idx = next(n for n, i in enumerate(items) if i.get("stage") == "generating")
+    first_delta_idx = next(n for n, i in enumerate(items) if i["type"] == "delta")
+    assert gen_idx < first_delta_idx   # generating 先於首 token
+
+
+def test_astream_client_abort_cancels_tier_task(monkeypatch):
+    # 停止鍵使 client abort 成為常態路徑：generator 收 GeneratorExit 時
+    # tier_task 不可成孤兒（否則多燒一次 API call + unretrieved exception 警告）。
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
+    state = {}
+
+    async def never_tier(*a, **k):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            raise
+
+    monkeypatch.setattr(rag, "aclassify_tier", never_tier)
+    delta = SimpleNamespace(type="response.output_text.delta", delta="部分")
+    completed = SimpleNamespace(type="response.completed", response=SimpleNamespace(
+        output=[], id="r", usage=None, status="completed", incomplete_details=None))
+    client = _FakeAsyncClient([delta, completed])
+
+    async def run():
+        gen = _astream(client, "q", vector_store_id="vs_1", model="m")
+        async for it in gen:
+            if it["type"] == "delta":
+                break               # 模擬使用者中途停止
+        await asyncio.sleep(0)      # 讓 tier_task 先起跑（進入 await）再中止
+        await asyncio.sleep(0)
+        await gen.aclose()          # GeneratorExit → finally 應 cancel tier_task
+        for _ in range(3):
+            await asyncio.sleep(0)  # 讓 cancellation 傳遞
+
+    asyncio.run(run())
+    assert state.get("cancelled") is True
+
+
+def test_astream_meta_path_has_no_stage_events(monkeypatch):
+    # 能力回答是即答（無檢索），不應出現階段事件。
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("meta_capability"))
+    client = _FakeAsyncClient([])
+
+    async def run():
+        return [it async for it in _astream(client, "你能做什麼?", vector_store_id="vs_1", model="m")]
+
+    items = asyncio.run(run())
+    assert all(i["type"] != "stage" for i in items)
+
+
+def test_build_dual_kwargs_followup_relaxes_citation_lock(monkeypatch):
+    # H2（實測重現）：延續輪「好啊請幫我生成對照表」檢索到不相關來源，
+    # 引用規約「只依這些來源作答」迫使模型做錯主題的表。延續輪需附對話脈絡優先指引。
+    from app.rag import _build_dual_kwargs, CONTINUATION_GUIDANCE
+    follow = _build_dual_kwargs("好啊請幫我生成", "## 法規依據\n[來源1]無關內容", "m", "resp_prev")
+    assert CONTINUATION_GUIDANCE in follow["instructions"]
+    first = _build_dual_kwargs("個資法第6條？", "## 法規依據\n[來源1]內容", "m", None)
+    assert CONTINUATION_GUIDANCE not in first["instructions"]   # 首輪不附（維持嚴格引用）
+
+
+def test_astream_answer_followup_skips_intent_gate(monkeypatch):
+    import app.rag as rag
+
+    def _boom(*a, **k):
+        raise AssertionError("延續輪不應呼叫 aclassify_intent")
+
+    monkeypatch.setattr(rag, "aclassify_intent", _boom)
+    monkeypatch.setattr(rag, "aclassify_tier", lambda *a, **k: _async_return("明文"))
+    completed_resp = SimpleNamespace(
+        output=[SimpleNamespace(type="message", content=[SimpleNamespace(text="表格", annotations=[])])],
+        id="r2", usage=None, status="completed", incomplete_details=None)
+    completed = SimpleNamespace(type="response.completed", response=completed_resp)
+    client = _FakeAsyncClient([completed])
+
+    async def run():
+        items = []
+        async for it in _astream(client, "好啊請幫我生成", vector_store_id="vs_1",
+                                 model="m", previous_response_id="resp_prev"):
+            items.append(it)
+        return items
+
+    items = asyncio.run(run())
+    final = [i for i in items if i["type"] == "final"][0]
+    assert final["evidence_mode"] != "capability"
+    assert len(client.vector_stores.search_calls) == 2
 
 
 def test_answer_question_attaches_tier(monkeypatch):

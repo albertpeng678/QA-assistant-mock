@@ -64,6 +64,15 @@ CITATION_PROTOCOL = (
     "（可多個，如 [來源1][來源3]）。只依這些來源作答；若來源不足以回答，明確聲明語料未涵蓋，不得杜撰。"
 )
 
+# 延續輪（有 previous_response_id）附加：延續句（「好啊請幫我生成對照表」）本身無實質
+# 內容，拿它檢索常撈到無關來源；引用規約「只依這些來源作答」會迫使模型做錯主題的表
+# （實測：內線交易追問被公司登記函釋帶歪）。延續輪放行對話脈絡優先。
+CONTINUATION_GUIDANCE = (
+    "\n\n【多輪延續】本輪是先前對話的延續。若使用者在回應你先前提出的建議（如「好啊」"
+    "「請幫我生成」），請依先前對話的主題與已給的依據完成該請求；此時若下方檢索依據"
+    "與對話主題明顯不符，忽略之、不引用 [來源N]，沿用先前回合已標註的依據即可。"
+)
+
 # gpt-5.4-mini 為推理模型：用 reasoning/text.verbosity，不可傳 temperature/top_p。
 # max_output_tokens 同時涵蓋「可見輸出 + 推理 token」（OpenAI Responses API 定義）；
 # 推理模型若預算太小，會在答案中途以 status="incomplete" 截斷，故給足輸出預算。
@@ -300,7 +309,11 @@ def parse_response(response):
 # context7：多餘低相關 context 反而降低答案品質、燒 token、增延遲）。
 LAW_TOP_K = 12
 JUDGMENT_TOP_M = 3            # 判決上限：實測 score 高且平坦，>3 多為重複資訊＋噪音
-DUAL_LAW_THRESHOLD = 0.5
+# 法條路門檻：原 0.5 實測產生懸崖效應——「個資外洩通報」「營業秘密求償」等題的最相關
+# 文件落在 0.45–0.49 被整批切掉，context 退化成不相關高分文件＋判決 → gap 答案。
+# 降至 0.35（與判決路對稱）：好查詢 top-12 早被 ≥0.5 高分塞滿、尾段擠不進，不受影響；
+# 被餓死的查詢救回臨界相關文件。語料量倍增（判決 1.2 萬）後 hybrid 分數整體偏移亦獲緩衝。
+DUAL_LAW_THRESHOLD = 0.35
 # 判決專屬門檻（與法條路解耦）：判決弱勢題 score 實測低至 0.35–0.62（PoC 資遣費題），
 # 若沿用法條的 0.5 會把這些「正要救」的判決砍掉，故設 0.35。對「法條池門檻上升」免疫。
 DUAL_JUDGMENT_THRESHOLD = 0.35
@@ -359,26 +372,33 @@ def _result_doc_type(r):
     return getattr(attrs, "doc_type", None) if attrs else None
 
 
+_CHUNKS_PER_FILE = 2  # 同檔合併進 context 的 chunk 上限：1 會讓長判決失去細節，>2 重複噪音
+
+
 def _dedupe_results(results, seen):
-    """同檔名只留分數最高的一筆 search result，保留首見順序；seen 跨區段累積。
+    """同檔名收斂成一組（最高分前 _CHUNKS_PER_FILE 個 chunk），保留首見順序；seen 跨區段累積。
 
     判決路常對同一份判決回多個 chunk（實測：個資外洩題同檔 ×3），若每個 chunk 各成
-    一個 [來源N]，citations/來源列就會出現重複檔名。在組 context 前先按檔名去重，使
-    [來源N]、evidence、citations 天生唯一，並避免餵模型多份重複判決。
+    一個 [來源N]，citations/來源列就會出現重複檔名。改為同檔合併單一來源，但保留前 2
+    高分 chunk 串進 context——兼顧「來源唯一」與「長判決 context 豐富度」。
+    回傳 list[list[result]]：外層依首見序、內層依分數降冪（首筆=最高分，供取 score/url）。
     """
-    best = {}
+    groups = {}
     order = []
     for r in results:
         fn = getattr(r, "filename", None) or ""
         if fn in seen:
             continue
-        if fn not in best:
-            best[fn] = r
+        if fn not in groups:
+            groups[fn] = []
             order.append(fn)
-        elif (getattr(r, "score", None) or 0) > (getattr(best[fn], "score", None) or 0):
-            best[fn] = r
+        groups[fn].append(r)
     seen.update(order)
-    return [best[fn] for fn in order]
+    return [
+        sorted(groups[fn], key=lambda r: getattr(r, "score", None) or 0,
+               reverse=True)[:_CHUNKS_PER_FILE]
+        for fn in order
+    ]
 
 
 def build_context_block(law, judgment):
@@ -394,21 +414,22 @@ def build_context_block(law, judgment):
     law = _dedupe_results(law, seen)
     judgment = _dedupe_results(judgment, seen)
 
-    def add_section(title, results):
-        if not results:
+    def add_section(title, groups):
+        if not groups:
             return
         lines.append(f"## {title}")
-        for r in results:
+        for chunks in groups:           # 同檔的 top chunk 群（首筆=最高分）
             idx = len(sources) + 1
-            filename = getattr(r, "filename", None) or ""
-            text = _result_text(r)
+            best = chunks[0]
+            filename = getattr(best, "filename", None) or ""
+            text = "\n…\n".join(_result_text(c) for c in chunks)
             entry = {
                 "filename": filename,
                 "text": text,
-                "score": getattr(r, "score", None),
-                "doc_type": _result_doc_type(r),
+                "score": getattr(best, "score", None),
+                "doc_type": _result_doc_type(best),
             }
-            url = _result_url(r)
+            url = _result_url(best)
             if url:
                 entry["url"] = url
             sources.append(entry)
@@ -504,7 +525,10 @@ def answer_question(client, question, *, vector_store_id, model, previous_respon
     回傳 {"answer","citations","evidence","evidence_mode","response_id","usage",...}。
     previous_response_id 可串接多輪對話。
     """
-    if classify_intent(client, question, model=model) == "meta_capability":
+    # intent gate 只在首輪：延續輪（有 previous_response_id）的「好啊請幫我生成」等
+    # 肯定句無法條關鍵字，實測 100% 被誤判 meta_capability 而吐罐頭答案、攔截多輪。
+    if previous_response_id is None and \
+            classify_intent(client, question, model=model) == "meta_capability":
         return capability_result(load_manifest())
     routes = retrieve_dual(client, question, vector_store_id=vector_store_id)
     context, sources = build_context_block(routes["law"], routes["judgment"])
@@ -546,6 +570,8 @@ def _build_dual_kwargs(question, context, model, previous_response_id):
     else:
         user_input = question
         instructions = ANSWER_INSTRUCTIONS
+    if previous_response_id:
+        instructions += CONTINUATION_GUIDANCE
     kwargs = {
         "model": model,
         "input": user_input,
@@ -579,36 +605,48 @@ def stream_answer(client, question, *, vector_store_id, model, previous_response
 
 async def astream_answer(client, question, *, vector_store_id, model, previous_response_id=None):
     """SSE 串流問答（非阻塞 async）：先 await 雙路檢索組 context，再 async 串流生成。"""
-    if await aclassify_intent(client, question, model=model) == "meta_capability":
+    # intent gate 只在首輪（同 answer_question）：延續輪直接走檢索問答，不被罐頭攔截。
+    if previous_response_id is None and \
+            await aclassify_intent(client, question, model=model) == "meta_capability":
         result = capability_result(load_manifest())
         yield {"type": "delta", "text": result["answer"]}
         yield {"type": "final", **result}
         return
+    # 等待UX：階段事件掛真實管線節點（NN/g：>10s 等待要顯示真步驟，不演戲）。
+    yield {"type": "stage", "stage": "retrieving"}
     routes = await aretrieve_dual(client, question, vector_store_id=vector_store_id)
     context, sources = build_context_block(routes["law"], routes["judgment"])
+    yield {"type": "stage", "stage": "retrieved",
+           "law_count": sum(1 for s in sources if s.get("doc_type") != "判決"),
+           "judgment_count": sum(1 for s in sources if s.get("doc_type") == "判決")}
     kwargs = _build_dual_kwargs(question, context, model, previous_response_id)
     kwargs["stream"] = True
     final_response = None
     stream = await client.responses.create(**kwargs)
+    yield {"type": "stage", "stage": "generating"}
     tier_task = asyncio.create_task(aclassify_tier(client, question, context, model=model))
-    async for event in stream:
-        event_type = getattr(event, "type", None) or ""
-        terminal = _terminal_response(event, event_type)
-        if terminal is not None:
-            final_response = terminal
-            continue
-        delta = getattr(event, "delta", None)
-        if event_type.endswith("output_text.delta") and isinstance(delta, str):
-            yield {"type": "delta", "text": delta}
-    if final_response is not None:
-        final = parse_dual_response(final_response, sources)
-        try:
-            final["tier"] = await tier_task
-        except Exception:  # noqa: BLE001
-            final["tier"] = None
-        yield {"type": "final", **final}
-    else:
-        tier_task.cancel()
+    try:
+        async for event in stream:
+            event_type = getattr(event, "type", None) or ""
+            terminal = _terminal_response(event, event_type)
+            if terminal is not None:
+                final_response = terminal
+                continue
+            delta = getattr(event, "delta", None)
+            if event_type.endswith("output_text.delta") and isinstance(delta, str):
+                yield {"type": "delta", "text": delta}
+        if final_response is not None:
+            final = parse_dual_response(final_response, sources)
+            try:
+                final["tier"] = await tier_task
+            except Exception:  # noqa: BLE001
+                final["tier"] = None
+            yield {"type": "final", **final}
+    finally:
+        # 涵蓋所有離開路徑（含使用者按停止 → client abort → GeneratorExit）：
+        # tier_task 不可成孤兒，否則多燒一次 API call 並留下未取回例外警告。
+        if not tier_task.done():
+            tier_task.cancel()
 
 
 _FOLLOWUP_SCHEMA = {
