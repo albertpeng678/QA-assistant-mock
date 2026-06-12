@@ -76,3 +76,61 @@ def test_capability_answer_no_hallucinated_numbers():
     ans = capability_answer(m)
     assert "5" in ans
     assert "1,163" not in ans
+
+
+import asyncio
+from app.capability import classify_intent, aclassify_intent, INTENT_INSTRUCTIONS
+
+
+class _FakeResp:
+    def __init__(self, text):
+        self.output_text = text
+
+
+class _FakeResponses:
+    def __init__(self, text):
+        self._text = text
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeResp(self._text)
+
+
+class _FakeIntentClient:
+    def __init__(self, text):
+        self.responses = _FakeResponses(text)
+
+
+def test_classify_intent_meta():
+    c = _FakeIntentClient('{"intent": "meta_capability"}')
+    assert classify_intent(c, "你能做什麼？", model="m") == "meta_capability"
+    assert c.responses.calls[0]["text"]["format"]["type"] == "json_schema"
+
+
+def test_classify_intent_legal():
+    c = _FakeIntentClient('{"intent": "legal_question"}')
+    assert classify_intent(c, "個資法第6條？", model="m") == "legal_question"
+
+
+def test_classify_intent_bad_json_falls_back_legal():
+    c = _FakeIntentClient("not json")
+    assert classify_intent(c, "x", model="m") == "legal_question"
+
+
+class _FakeAResponses:
+    def __init__(self, text):
+        self._text = text
+
+    async def create(self, **kwargs):
+        return _FakeResp(self._text)
+
+
+class _FakeAIntentClient:
+    def __init__(self, text):
+        self.responses = _FakeAResponses(text)
+
+
+def test_aclassify_intent_meta():
+    out = asyncio.run(aclassify_intent(_FakeAIntentClient('{"intent":"meta_capability"}'), "你會什麼", model="m"))
+    assert out == "meta_capability"
