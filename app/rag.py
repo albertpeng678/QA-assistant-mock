@@ -446,7 +446,9 @@ def build_context_block(law, judgment):
 
 
 # dual 流引用：模型以 [來源N] 引用我們注入的來源，N 對應 build_context_block 的序號（1-based）。
-_SOURCE_MARKER_RE = re.compile(r"\[來源(\d+)\]")
+# 方括號設為 optional：production 實測模型偶爾裸寫「來源4」（如「（施行細則§22、來源4）」），
+# 不轉會殘留純文字。答案中「來源+數字」緊鄰幾乎必為引用意圖（context 注入的就是 [來源N] 編號）。
+_SOURCE_MARKER_RE = re.compile(r"\[?來源(\d+)\]?")
 
 
 def _linkify_source_markers(text, n_sources):

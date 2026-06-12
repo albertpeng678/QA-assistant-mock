@@ -57,7 +57,7 @@
   .answer-prose blockquote{ background:#7a2e2e0a; border:1px solid var(--ink-12); border-radius:10px; padding:10px 13px; color:var(--ink-70); margin:1em 0 0; }
   /* 確定性層級 badge（Layer-0，填色 chip） */
   .tier-badge{ display:inline-flex; align-items:center; font-family:'Public Sans'; font-size:12px; font-weight:700; color:var(--paper); border-radius:12px; padding:3px 11px; margin-bottom:8px; }
-  .tier-badge.tier-explicit{ background:var(--ink); }
+  .tier-badge.tier-explicit{ background:var(--blood); }   /* 明文：朱紅（產品主色） */
   .tier-badge.tier-interpret{ background:#2e5a52; }
   .tier-badge.tier-practice{ background:#8a5a12; }
   .tier-badge.tier-gap{ background:var(--ink-50); }
@@ -82,7 +82,7 @@
   /* —— 缺口⑦：確定性層級標籤（填色 chip：墨／teal／amber／灰，2 低飽和輔色經使用者核可）—— */
   .tier{ display:inline-block; font-family:'Public Sans'; font-size:.74em; font-weight:700;
          padding:.1em .6em; border-radius:11px; margin-right:.35em; color:var(--paper); }
-  .tier-explicit{ background:var(--ink); }       /* 明文：墨 */
+  .tier-explicit{ background:var(--blood); }     /* 明文：朱紅（與 Layer-0 badge 一致） */
   .tier-interpret{ background:#2e5a52; }          /* 解釋/裁量：teal */
   .tier-practice{ background:#8a5a12; }           /* 實務見解：amber */
   .tier-gap{ background:var(--ink-50); }          /* 語料未涵蓋：灰 */
@@ -287,6 +287,9 @@ async function renderStarters(){
       <div id="dom-tags" class="flex flex-wrap justify-center gap-2 max-w-xl mx-auto"></div>
       <div id="dom-reveal" class="max-w-md mx-auto mt-4 text-left"></div>
     </div>`;
+  // 競態防護：await /api/capability 期間使用者可能已送出問題（submit 移除的空狀態
+  // 還沒注入）——對話已開始就不再注入，否則空狀態會出現在對話下方。
+  if(state.answering || thread.querySelector("[data-answer]")) return;
   thread.appendChild(box);
   const tagsEl = box.querySelector("#dom-tags"), revealEl = box.querySelector("#dom-reveal");
   tagsEl.innerHTML = cats.map((c,i)=>`<button class="dom-tag${i===0?" on":""}" data-dom="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("");

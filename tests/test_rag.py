@@ -763,6 +763,17 @@ _SOURCES = [
 ]
 
 
+def test_parse_dual_bare_source_marker_also_linkified():
+    # production 實測：模型偶爾寫「來源2」不帶方括號（如「（施行細則§22、來源4）」），
+    # 舊 regex 只認 [來源N] → 純文字殘留。裸寫法也要轉腳註。
+    resp = _msg("依施行細則規定、來源2，應即時通知。")
+    out = parse_dual_response(resp, _SOURCES)
+    assert "來源2" not in out["answer"]
+    assert "[^1]" in out["answer"]                       # 首個被引用 → 腳註 1
+    assert out["evidence_mode"] == "dual_cited"
+    assert out["citations"] == ["臺北地院-判決-資遣費案.txt"]
+
+
 def test_parse_dual_cited_maps_markers_to_footnotes():
     resp = _msg("加班費依規定計算[來源1]，實務見解參此[來源2]。")
     out = parse_dual_response(resp, _SOURCES)

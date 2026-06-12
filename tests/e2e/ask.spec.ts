@@ -87,6 +87,21 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(answer).not.toContainText("|---");
   });
 
+  test("競態：capability 慢於送出時，空狀態不得重注入對話下方", async ({ page }) => {
+    // production 冷讀發現：renderStarters await /api/capability 後才 appendChild，
+    // 若使用者在 fetch 完成前送出，空狀態會被注入到對話後面。
+    await page.route("**/api/capability", async (route) => {
+      await new Promise((r) => setTimeout(r, 1500));   // 只延時，不改資料
+      await route.continue();
+    });
+    await page.goto("/");
+    await page.locator("#q").fill("個資外洩要通報誰？期限多久？");
+    await page.locator("#send").click();               // capability 仍 pending
+    await expect(page.locator(".src-row")).toHaveCount(4, { timeout: 20000 });
+    await page.waitForTimeout(800);                    // 讓被延遲的 capability 完成
+    await expect(page.locator("#thread > .text-center")).toHaveCount(0);
+  });
+
   test("等待狀態：階段列推進（實數）後於首 token 收合", async ({ page }) => {
     await page.goto("/");
     await page.locator(`button.starter[data-q="${FIRST_STARTER}"]`).click();
