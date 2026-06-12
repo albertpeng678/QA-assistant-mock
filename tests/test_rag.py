@@ -382,7 +382,9 @@ def test_astream_answer_yields_deltas_then_final(monkeypatch):
     assert client.responses.calls[0]["reasoning"] == {"effort": "low"}
 
 
-def test_astream_answer_skips_reasoning_deltas():
+def test_astream_answer_skips_reasoning_deltas(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
     reasoning = SimpleNamespace(type="response.reasoning_summary_text.delta", delta="思考中…")
     answer = SimpleNamespace(type="response.output_text.delta", delta="正式答案")
     completed = SimpleNamespace(type="response.completed", response=_fake_response_with_results())
