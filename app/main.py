@@ -26,6 +26,7 @@ from pydantic import BaseModel, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from app import config
+from app.capability import load_manifest
 from app.db import Feedback, QueryLog, make_session_factory
 from app.rag import answer_question, astream_answer, suggest_followups
 
@@ -128,6 +129,11 @@ def index():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/capability")
+def capability():
+    return load_manifest()
 
 
 # ---------- Schemas ----------

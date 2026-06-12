@@ -174,3 +174,12 @@ def test_feedback_calls_save(monkeypatch):
 def test_feedback_rejects_bad_rating():
     resp = client.post("/api/feedback", json={"query_log_id": 5, "rating": "meh"})
     assert resp.status_code == 422
+
+
+def test_api_capability_returns_manifest():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    r = TestClient(app).get("/api/capability")
+    assert r.status_code == 200
+    body = r.json()
+    assert "doc_type_counts" in body and "categories" in body and "cutoff" in body
