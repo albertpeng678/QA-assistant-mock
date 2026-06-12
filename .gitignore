@@ -19,3 +19,7 @@ blob-report/
 
 # 裁判書語料（由 scripts/build_judgment_corpus.py pipeline 重建，不進 repo；量大且含個資）
 data/judgments/
+
+# 爬蟲產物（登入 cookie、下載/解壓暫存）—— 含敏感 cookie，絕不進 repo
+.crawl/
+judicial_tmp/

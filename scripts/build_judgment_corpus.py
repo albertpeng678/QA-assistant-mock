@@ -12,7 +12,9 @@
   python scripts/build_judgment_corpus.py --months 12 --skip-latest --upload
 """
 import argparse
+import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -22,8 +24,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ingest_judgments as ij  # noqa: E402  複用 process_one / upload / _load_dotenv / OUTPUT_DIR
 
-UNRAR = r"C:\Program Files\WinRAR\UnRAR.exe"
-WORK = Path(r"C:\Users\albertpeng\judicial_work\corpus_tmp")
+# 跨平台：Windows 用 WinRAR UnRAR.exe；其他（macOS/Linux）用 unar（brew install unar）。
+# 可用 env 覆寫：UNRAR_PATH（解壓工具）、JUDICIAL_WORK（暫存目錄）。
+_IS_WIN = platform.system() == "Windows"
+UNRAR = os.environ.get("UNRAR_PATH") or (
+    r"C:\Program Files\WinRAR\UnRAR.exe" if _IS_WIN else "unar")
+WORK = Path(os.environ.get("JUDICIAL_WORK") or (
+    r"C:\Users\albertpeng\judicial_work\corpus_tmp" if _IS_WIN
+    else str(Path(__file__).resolve().parent.parent / "judicial_tmp")))
 FID_BASE = 65335          # 202603 對應的下載 fid
 YM_BASE = (2026, 3)       # 對應年月
 # 排洗錢後的 9 個法遵領域法規名（rg alternation 預篩候選用）。
@@ -50,6 +58,20 @@ def _find_rg():
 RG = _find_rg()
 
 
+def _load_auth():
+    """JCOOKIE/JUA：優先既有 env；否則從 .crawl/auth.json 載入（cookie 不經 shell、不進 repo）。"""
+    if os.environ.get("JCOOKIE") and os.environ.get("JUA"):
+        return
+    p = Path(__file__).resolve().parent.parent / ".crawl" / "auth.json"
+    if not p.exists():
+        return
+    d = json.loads(p.read_text(encoding="utf-8"))
+    if d.get("JCOOKIE"):
+        os.environ.setdefault("JCOOKIE", d["JCOOKIE"])
+    if d.get("JUA"):
+        os.environ.setdefault("JUA", d["JUA"])
+
+
 def gen_months(n: int, skip_latest: bool):
     """從 202603 往前生成 [(ym_str, fid)]；skip_latest 跳過 202603（PoC 已上傳）。"""
     out = []
@@ -67,20 +89,35 @@ def gen_months(n: int, skip_latest: bool):
 
 
 def download(fid: int, dest: Path):
-    import requests
+    # 用 curl（系統信任庫）下載：opendata 憑證缺 Subject Key Identifier，OpenSSL 3.x / requests
+    # 會 CERTIFICATE_VERIFY_FAILED；curl 走系統信任較寬鬆且「仍驗證憑證」（比 verify=False 安全）。
+    # cookie/UA 寫入暫存 curl config（不經 argv，避免 secret 外洩），下載後即刪。
     cookie = os.environ["JCOOKIE"]
     ua = os.environ["JUA"]
+    cfg = dest.parent / ".curl.cfg"
+    cfg.write_text(
+        f'header = "Cookie: {cookie}"\n'
+        'header = "Referer: https://opendata.judicial.gov.tw/"\n'
+        f'user-agent = "{ua}"\n',
+        encoding="utf-8")
     url = f"https://opendata.judicial.gov.tw/api/FilesetLists/{fid}/file"
-    h = {"User-Agent": ua, "Cookie": cookie, "Referer": "https://opendata.judicial.gov.tw/"}
-    with requests.get(url, headers=h, stream=True, timeout=300) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for ch in r.iter_content(1024 * 256):
-                f.write(ch)
+    try:
+        subprocess.run(
+            ["curl", "-sS", "--fail", "--retry", "3", "--retry-delay", "5",
+             "--config", str(cfg), "-o", str(dest), url],
+            check=True)
+    finally:
+        cfg.unlink(missing_ok=True)
 
 
 def extract(rar: Path, outdir: Path):
-    subprocess.run([UNRAR, "x", "-o+", "-idq", str(rar), str(outdir) + os.sep], check=True)
+    # unar（Mac/Linux）與 WinRAR UnRAR.exe（Windows）旗標不同，依工具名分流。
+    tool = os.path.basename(str(UNRAR)).lower()
+    if tool.startswith("unar"):
+        # -q 安靜 -f 覆寫 -D 不建外層目錄 -o 輸出目錄
+        subprocess.run([UNRAR, "-q", "-f", "-D", "-o", str(outdir), str(rar)], check=True)
+    else:
+        subprocess.run([UNRAR, "x", "-o+", "-idq", str(rar), str(outdir) + os.sep], check=True)
 
 
 def rg_candidates(root: Path):
@@ -115,8 +152,9 @@ def main():
         pass
 
     ij._load_dotenv()
+    _load_auth()  # 從 .crawl/auth.json 補 JCOOKIE/JUA（Playwright 登入產出）
     if "JCOOKIE" not in os.environ or "JUA" not in os.environ:
-        sys.exit("需設定 JCOOKIE / JUA 環境變數（opendata 會員登入 cookie）")
+        sys.exit("需設定 JCOOKIE / JUA（執行 Playwright 登入產生 .crawl/auth.json，或設環境變數）")
 
     WORK.mkdir(parents=True, exist_ok=True)
     ij.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
