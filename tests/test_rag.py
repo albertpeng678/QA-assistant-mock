@@ -168,7 +168,7 @@ def test_answer_question_applies_reasoning_model_params(monkeypatch):
     answer_question(client, "加班費?", vector_store_id="vs_1", model="gpt-5.4-mini")
     call = client.responses.calls[0]
     assert call["reasoning"] == {"effort": "low"}
-    assert call["text"]["verbosity"] == "medium"
+    assert call["text"]["verbosity"] == "low"
     assert call["max_output_tokens"] == 4096  # 推理模型需更多輸出預算，避免 incomplete 截斷
     assert call["instructions"] == ANSWER_INSTRUCTIONS + CITATION_PROTOCOL
     # 推理模型不可帶 temperature/top_p
@@ -699,6 +699,20 @@ def test_build_context_block_preserves_url_when_present():
     assert sources[0]["url"] == "https://x"
 
 
+def test_build_context_block_dedupes_same_filename_keeps_best():
+    # 真實情況（個資外洩題實測）：判決路同一份判決回多個 chunk，
+    # 不應變成多個來源 / 重複 citations；同檔留最高分 chunk、只產一個 [來源N]。
+    judgment = [
+        _r("臺北高等行政法院-判決-個資.txt", "段落一（較低分）", 0.40, "判決"),
+        _r("臺北高等行政法院-判決-個資.txt", "段落二（最高分）", 0.55, "判決"),
+        _r("臺北高等行政法院-判決-個資.txt", "段落三", 0.45, "判決"),
+    ]
+    context, sources = build_context_block([], judgment)
+    assert [s["filename"] for s in sources] == ["臺北高等行政法院-判決-個資.txt"]
+    assert sources[0]["text"] == "段落二（最高分）"  # 留最高分 chunk，不只留首筆
+    assert context.count("[來源") == 1
+
+
 def test_result_text_empty_content_falls_back_to_text():
     from app.rag import _result_text
     r = SimpleNamespace(content=[], text="後備文字")
@@ -828,3 +842,37 @@ def test_answer_question_legal_uses_retrieval(monkeypatch):
     client = _FakeClient(_fake_response())
     out = _aq(client, "個資法第6條？", vector_store_id="vs_1", model="m")
     assert len(client.vector_stores.search_calls) == 2
+
+
+def test_verbosity_is_low():
+    from app.rag import _MODEL_PARAMS
+    assert _MODEL_PARAMS["text"]["verbosity"] == "low"
+
+
+def test_answer_question_attaches_tier(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "legal_question")
+    monkeypatch.setattr(rag, "classify_tier", lambda *a, **k: "明文")
+    client = _FakeClient(_fake_response())
+    out = rag.answer_question(client, "個資外洩?", vector_store_id="vs_1", model="m")
+    assert out["tier"] == "明文"
+
+
+def test_astream_answer_attaches_tier(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
+    monkeypatch.setattr(rag, "aclassify_tier", lambda *a, **k: _async_return("實務見解"))
+    delta = SimpleNamespace(type="response.output_text.delta", delta="文字")
+    completed_resp = SimpleNamespace(
+        output=[SimpleNamespace(type="message", content=[SimpleNamespace(text="文字", annotations=[])])],
+        id="r", usage=None, status="completed", incomplete_details=None)
+    completed = SimpleNamespace(type="response.completed", response=completed_resp)
+    client = _FakeAsyncClient([delta, completed])
+    async def run():
+        items = []
+        async for it in rag.astream_answer(client, "q", vector_store_id="vs_1", model="m"):
+            items.append(it)
+        return items
+    items = asyncio.run(run())
+    final = [i for i in items if i["type"] == "final"][0]
+    assert final["tier"] == "實務見解"

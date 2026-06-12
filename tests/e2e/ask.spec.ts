@@ -87,11 +87,19 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(answer).not.toContainText("|---");
   });
 
-  test("確定性層級標籤渲染為 chip（缺口⑦）", async ({ page }) => {
+  test("明文題渲染 Layer-0 確定性 badge（缺口⑦）", async ({ page }) => {
     await askFirstStarter(page);
-    const answer = page.locator("[data-answer]");
-    await expect(answer.locator(".tier-explicit")).toContainText("明文");
-    await expect(answer.locator(".tier-interpret")).toBeVisible();
+    // 新設計：單一 Layer-0 badge，來自後端 classify_tier（evt.tier），取代內文逐句【明文】標記
+    await expect(page.locator(".tier-badge.tier-explicit")).toContainText("明文");
+  });
+
+  test("裁量題 Layer-0 badge 顯示為解釋/裁量（缺口⑦）", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#q").fill("__GAP__ 個資外洩通知是否即時的裁量");
+    await page.locator("#send").click();
+    const badge = page.locator(".tier-badge.tier-interpret");
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("解釋/裁量");  // 鎖定 evt.tier→label 對映（對稱明文題）
   });
 
   test("引證依據誠實標示『答案引用來源』（缺口④）", async ({ page }) => {

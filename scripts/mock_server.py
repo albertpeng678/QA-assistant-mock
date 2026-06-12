@@ -16,18 +16,16 @@ app = FastAPI()
 STATIC = Path(__file__).resolve().parent.parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-# 反映新輸出：表格為主（缺口②③）+ 確定性層級標籤（缺口⑦）+ 腳註引用
+# 反映新輸出：BLUF-first + 表格（≤3欄）+ 確定性層級標籤（缺口⑦）+ 腳註引用 + 末尾 blockquote 免責
 ANSWER = (
-    "發生個人資料外洩時，應依下列步驟通知當事人並通報主管機關：\n\n"
-    "| 步驟 | 法規依據 | 重點說明 |\n"
-    "|---|---|---|\n"
-    "| 查明並通知當事人 | 個人資料保護法第12條 | 應於查明後以適當方式通知當事人[^1] |\n"
-    "| 通報主管機關 | 個人資料保護法第22條 | 公務機關應通報目的事業主管機關[^2] |\n"
-    "| 屆期未改正按次處罰 | 個人資料保護法第48條 | 得按次處新臺幣罰鍰[^3] |\n\n"
-    "【明文】上述通知與通報義務於條文有明文規定。\n\n"
-    "【解釋/裁量】「適當方式」屬解釋空間，實務上依個案性質認定。\n\n"
-    "【實務見解】臺北地院曾就未即時通知認定須負損害賠償責任[^4]。\n\n"
-    "本回答為研究輔助，非正式法律意見。"
+    "個資外洩經查明後應**即時通知當事人**，達一定規模並須通報主管機關（個資法§12）。\n\n"
+    "- 知悉外洩、查明後應即時通知當事人；達一定規模並通報主管機關（§12）。[^1]\n"
+    "- 主管機關得令限期改正資料安全維護缺失（§22）。[^2]\n"
+    "- 違反限期改正命令者，按次處 2 萬元以上罰鍰（§48）。[^3]\n"
+    "- 實務上未即時通知，可能構成違反通知義務並須負損害賠償（臺北地院判決）。[^4]\n\n"
+    "| 對象 | 通知時機 | 依據 |\n|---|---|---|\n"
+    "| 當事人 | 查明後即時 | `§12` |\n| 主管機關 | 達一定規模時 | `§12` |\n| 限期未改正 | 按次處罰鍰 | `§48` |\n\n"
+    "> 提醒：「一定規模」通報門檻依各主管機關辦法認定，建議確認所屬主管機關規範。本回答為研究輔助，非正式法律意見。"
 )
 _URL = "https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=I0050021&flno={}"
 EVIDENCE = [
@@ -59,7 +57,10 @@ META_ANSWER = (
     "## 我不能做（請另尋專業）\n提供正式法律意見、代理訴訟、個案金額試算、最新即時判決。\n\n"
     "本回答為研究輔助，非正式法律意見。"
 )
-GAP_ANSWER = "【明文】個資法第48條規定屆期未改正得按次處罰鍰，惟具體抗辯須視個案事實而定…"
+GAP_ANSWER = (
+    "個資外洩是否「即時」通知，個案會依外洩規模與風險裁量認定；屆期未改正得按次處罰鍰"
+    "（個資法§48），惟具體抗辯須視個案事實而定。\n\n本回答為研究輔助，非正式法律意見。"
+)
 
 
 @app.get("/")
@@ -105,7 +106,8 @@ async def ask_stream(req: Request):
                 yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
                 time.sleep(0.02)
             final = {"type": "final", "answer": ans, "citations": [], "evidence": [],
-                     "evidence_mode": "dual_retrieved", "response_id": "resp_nc", "query_log_id": 4}
+                     "evidence_mode": "dual_retrieved", "tier": "語料未涵蓋",
+                     "response_id": "resp_nc", "query_log_id": 4}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
             yield "data: [DONE]\n\n"
             return
@@ -121,7 +123,7 @@ async def ask_stream(req: Request):
                 yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
                 time.sleep(0.02)
             final = {"type": "final", "answer": GAP_ANSWER, "citations": [EVIDENCE[0]["filename"]],
-                     "evidence": [EVIDENCE[0]], "evidence_mode": "dual_retrieved",
+                     "evidence": [EVIDENCE[0]], "evidence_mode": "dual_retrieved", "tier": "解釋/裁量",
                      "response_id": "resp_gap", "query_log_id": 3}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
             yield "data: [DONE]\n\n"
@@ -159,7 +161,7 @@ async def ask_stream(req: Request):
             time.sleep(0.04)
         if not no_final:
             final = {"type": "final", "answer": ANSWER, "citations": CITES,
-                     "evidence": EVIDENCE, "evidence_mode": "dual_cited",
+                     "evidence": EVIDENCE, "evidence_mode": "dual_cited", "tier": "明文",
                      "response_id": "resp_mock", "query_log_id": 1}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
         yield "data: [DONE]\n\n"

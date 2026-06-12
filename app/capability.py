@@ -28,7 +28,8 @@ def _fmt_counts(counts):
 def capability_answer(manifest):
     """由 manifest 組出固定結構 Markdown（不經 LLM、零幻覺）。"""
     counts = manifest.get("doc_type_counts", {})
-    cats = "・".join(manifest.get("categories", [])) or "（領域盤點中）"
+    # 濾掉 catch-all「其他」：它對使用者不是有意義的法令領域（與前端空狀態 tag 一致）
+    cats = "・".join(c for c in manifest.get("categories", []) if c != "其他") or "（領域盤點中）"
     cutoff = manifest.get("cutoff", "")
     cutoff_line = f"\n\n語料截止：{cutoff}" if cutoff else ""
     return (
@@ -87,3 +88,51 @@ async def aclassify_intent(client, question, *, model):
     except Exception:  # noqa: BLE001
         return "legal_question"
     return _parse_intent(getattr(resp, "output_text", ""))
+
+
+TIER_VALUES = ["明文", "解釋/裁量", "實務見解", "語料未涵蓋"]
+
+TIER_INSTRUCTIONS = (
+    "依『問題』與『檢索到的依據』判斷這題答案的確定性層級，回傳其一：\n"
+    "- 明文：法律條文明文規定、答案清楚。\n"
+    "- 解釋/裁量：條文須解釋或屬主管機關裁量。\n"
+    "- 實務見解：主要靠函釋／判決等實務見解。\n"
+    "- 語料未涵蓋：檢索不到足以回答的依據。"
+)
+
+_TIER_SCHEMA = {
+    "type": "json_schema", "name": "tier", "strict": True,
+    "schema": {"type": "object",
+               "properties": {"tier": {"type": "string", "enum": TIER_VALUES}},
+               "required": ["tier"], "additionalProperties": False},
+}
+
+
+def _parse_tier(output_text):
+    try:
+        t = json.loads(output_text or "").get("tier")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return "語料未涵蓋"
+    return t if t in TIER_VALUES else "語料未涵蓋"
+
+
+def _tier_input(question, context):
+    return f"問題：{question}\n\n檢索到的依據：\n{context or '（無）'}"
+
+
+def classify_tier(client, question, context, *, model):
+    try:
+        resp = client.responses.create(model=model, instructions=TIER_INSTRUCTIONS,
+                                       input=_tier_input(question, context), text={"format": _TIER_SCHEMA})
+    except Exception:  # noqa: BLE001 分類失敗不可拖垮主問答
+        return "語料未涵蓋"
+    return _parse_tier(getattr(resp, "output_text", ""))
+
+
+async def aclassify_tier(client, question, context, *, model):
+    try:
+        resp = await client.responses.create(model=model, instructions=TIER_INSTRUCTIONS,
+                                              input=_tier_input(question, context), text={"format": _TIER_SCHEMA})
+    except Exception:  # noqa: BLE001 分類失敗不可拖垮主問答
+        return "語料未涵蓋"
+    return _parse_tier(getattr(resp, "output_text", ""))

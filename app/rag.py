@@ -11,7 +11,7 @@ import asyncio
 import json
 import re
 
-from app.capability import load_manifest, capability_answer, classify_intent, aclassify_intent
+from app.capability import load_manifest, capability_answer, classify_intent, aclassify_intent, classify_tier, aclassify_tier
 
 
 # gpt-5.4-mini 把 inline 引用標記塞進答案 text，需在輸出前剝除：
@@ -31,30 +31,30 @@ def _strip_citation_markers(text):
 
 
 ANSWER_INSTRUCTIONS = (
-    "你是台灣企業法遵研究助理。一律以繁體中文、Markdown 作答，並遵循下列規則。\n"
+    "你是台灣企業法遵研究助理。一律繁體中文、Markdown 作答，力求白話、精簡、好讀。\n"
     "\n"
-    "【輸出結構：表格為主、文字為輔（智慧判斷）】\n"
-    "1. 先用一句話下結論；涉及解釋空間時明說「此題無單一確定答案」。\n"
-    "2. 可結構化的內容（多項對照、條文清單、義務/罰則、要件檢核）一律用 GFM Markdown 表格，"
-    "建議欄位：｜項目／情境｜法規依據（法規名稱＋條號）｜重點說明｜注意事項｜，"
-    "同一表格欄位數固定、每列一次寫完、儲存格保持單行精簡；儲存格內出現 | 一律寫成全形｜。\n"
-    "3. 單一結論、推理論證、需解釋衡量的內容用段落，不要硬塞進表格。\n"
+    "【倒金字塔：結論優先】\n"
+    "1. 第一行＝一句白話結論（≤40 字），講清楚「可以做什麼＋關鍵期限/數字（用 **粗體**）」；"
+    "否定條件、除外、定義一律放到後面的條列，不要塞進第一行。\n"
+    "   例：「**公開滿 18 小時後**才能買賣股票（證交法§157-1）。」\n"
     "\n"
-    "【確定性分層：每個依據標明層級】\n"
-    "- 【明文】法律明文規定，附法規名稱與條號。\n"
-    "- 【解釋/裁量】條文須解釋或屬主管機關裁量；說明理由與前提。\n"
-    "- 【實務見解】函釋、判決、通說，註明來源與權威性。\n"
-    "- 【語料未涵蓋】檢索不到依據時，明確聲明本系統語料未收錄，不要編造。\n"
-    "務必區分『法律確實未明文規定』與『本系統語料未收錄』兩者，不可混為一談。\n"
+    "【重點條列】\n"
+    "2. 結論後列 2–4 個重點（bullet），每點一句；白話表達，法規以括號附條號（縮寫如 §157-1），"
+    "例：「離職未滿 6 個月者也算內部人（§157-1）」。\n"
     "\n"
-    "【法律刻意保留的解釋空間】\n"
-    "當存在複數合理解釋時，列出各說（甲說／乙說）的論據與適用情境，標示傾向與前提假設，"
-    "不得武斷給單一答案。涉及個案事實認定、金額試算或訴訟策略時，加註"
-    "「此問題涉及個案判斷，建議諮詢專業律師」。\n"
+    "【表格：僅比較型】\n"
+    "3. 只有『3 項以上需橫向比較』才用表格，且**欄數 ≤ 3**；否則用條列或句子。表格內也用白話＋§縮寫，勿貼整段法條原文。\n"
     "\n"
-    "【接地與引用】僅依檢索到的條文／函釋作答，逐點標明出處（法規名稱＋條號），"
-    "不確定時用「依現有語料…」而非絕對斷言，嚴禁杜撰條號、金額或來源。\n"
-    "結尾固定附：本回答為研究輔助，非正式法律意見。"
+    "【白話與接地】\n"
+    "4. 用受高中教育者可懂的語言，平均句長盡量 ≤30 字；避免整段貼法條原文，改白話＋括號條號。\n"
+    "5. 僅依檢索到的依據作答，逐點標出處（§條號）；不確定用「依現有語料…」，嚴禁杜撰條號、金額或來源。\n"
+    "6. 務必區分『法律確實未明文規定』與『本系統語料未收錄』，不可混為一談。\n"
+    "\n"
+    "【不確定與免責：末端 caveat】\n"
+    "7. 涉及個案事實認定、金額試算、訴訟策略，以及不確定之處，集中放在答案末端，用一個 Markdown 引言區塊（以 > 起始）。"
+    "結尾固定一句（同一引言區塊內）：本回答為研究輔助，非正式法律意見。\n"
+    "\n"
+    "注意：不要在內文逐句標註【明文】【解釋】等層級字樣（層級由系統另外標示）。"
 )
 
 # dual 流的引用規約（附加在 instructions 後）：模型讀注入的 [來源N] 並回標 [來源N]。
@@ -69,7 +69,7 @@ CITATION_PROTOCOL = (
 # 推理模型若預算太小，會在答案中途以 status="incomplete" 截斷，故給足輸出預算。
 _MODEL_PARAMS = {
     "reasoning": {"effort": "low"},
-    "text": {"verbosity": "medium"},
+    "text": {"verbosity": "low"},
     "max_output_tokens": 4096,
 }
 
@@ -359,14 +359,40 @@ def _result_doc_type(r):
     return getattr(attrs, "doc_type", None) if attrs else None
 
 
+def _dedupe_results(results, seen):
+    """同檔名只留分數最高的一筆 search result，保留首見順序；seen 跨區段累積。
+
+    判決路常對同一份判決回多個 chunk（實測：個資外洩題同檔 ×3），若每個 chunk 各成
+    一個 [來源N]，citations/來源列就會出現重複檔名。在組 context 前先按檔名去重，使
+    [來源N]、evidence、citations 天生唯一，並避免餵模型多份重複判決。
+    """
+    best = {}
+    order = []
+    for r in results:
+        fn = getattr(r, "filename", None) or ""
+        if fn in seen:
+            continue
+        if fn not in best:
+            best[fn] = r
+            order.append(fn)
+        elif (getattr(r, "score", None) or 0) > (getattr(best[fn], "score", None) or 0):
+            best[fn] = r
+    seen.update(order)
+    return [best[fn] for fn in order]
+
+
 def build_context_block(law, judgment):
     """把雙路檢索結果組成「給模型讀」的 context 字串，並回確定性的 sources 清單。
 
     回 (context_str, sources)；sources 依【法規依據】→【判決見解】序號排列，
     每筆 {filename, text, score, doc_type, url?}，供 parse_dual_response 組 citations/evidence。
+    同檔名多 chunk 先去重（留最高分），避免來源列／citations 重複。
     """
     sources = []
     lines = []
+    seen = set()
+    law = _dedupe_results(law, seen)
+    judgment = _dedupe_results(judgment, seen)
 
     def add_section(title, results):
         if not results:
@@ -484,7 +510,9 @@ def answer_question(client, question, *, vector_store_id, model, previous_respon
     context, sources = build_context_block(routes["law"], routes["judgment"])
     kwargs = _build_dual_kwargs(question, context, model, previous_response_id)
     response = client.responses.create(**kwargs)
-    return parse_dual_response(response, sources)
+    result = parse_dual_response(response, sources)
+    result["tier"] = classify_tier(client, question, context, model=model)
+    return result
 
 
 def _build_answer_kwargs(question, vector_store_id, model, previous_response_id):
@@ -562,6 +590,7 @@ async def astream_answer(client, question, *, vector_store_id, model, previous_r
     kwargs["stream"] = True
     final_response = None
     stream = await client.responses.create(**kwargs)
+    tier_task = asyncio.create_task(aclassify_tier(client, question, context, model=model))
     async for event in stream:
         event_type = getattr(event, "type", None) or ""
         terminal = _terminal_response(event, event_type)
@@ -572,7 +601,14 @@ async def astream_answer(client, question, *, vector_store_id, model, previous_r
         if event_type.endswith("output_text.delta") and isinstance(delta, str):
             yield {"type": "delta", "text": delta}
     if final_response is not None:
-        yield {"type": "final", **parse_dual_response(final_response, sources)}
+        final = parse_dual_response(final_response, sources)
+        try:
+            final["tier"] = await tier_task
+        except Exception:  # noqa: BLE001
+            final["tier"] = None
+        yield {"type": "final", **final}
+    else:
+        tier_task.cancel()
 
 
 _FOLLOWUP_SCHEMA = {
