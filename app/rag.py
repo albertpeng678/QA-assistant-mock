@@ -11,6 +11,8 @@ import asyncio
 import json
 import re
 
+from app.capability import load_manifest, capability_answer, classify_intent, aclassify_intent
+
 
 # gpt-5.4-mini 把 inline 引用標記塞進答案 text，需在輸出前剝除：
 #   - 私用區引用字元 U+E200–U+E20F（如 、）
@@ -455,12 +457,29 @@ def parse_dual_response(response, sources):
     }
 
 
+def capability_result(manifest):
+    """meta 問題的回傳：與 parse_dual_response 同契約，evidence_mode=capability、無引用。"""
+    return {
+        "answer": capability_answer(manifest),
+        "citations": [],
+        "evidence": [],
+        "evidence_mode": "capability",
+        "response_id": None,
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "status": "completed",
+        "truncated": False,
+        "incomplete_reason": None,
+    }
+
+
 def answer_question(client, question, *, vector_store_id, model, previous_response_id=None):
     """雙路檢索 → 自組 context → Responses API（不帶 file_search tool）→ parse_dual_response。
 
     回傳 {"answer","citations","evidence","evidence_mode","response_id","usage",...}。
     previous_response_id 可串接多輪對話。
     """
+    if classify_intent(client, question, model=model) == "meta_capability":
+        return capability_result(load_manifest())
     routes = retrieve_dual(client, question, vector_store_id=vector_store_id)
     context, sources = build_context_block(routes["law"], routes["judgment"])
     kwargs = _build_dual_kwargs(question, context, model, previous_response_id)
@@ -532,6 +551,11 @@ def stream_answer(client, question, *, vector_store_id, model, previous_response
 
 async def astream_answer(client, question, *, vector_store_id, model, previous_response_id=None):
     """SSE 串流問答（非阻塞 async）：先 await 雙路檢索組 context，再 async 串流生成。"""
+    if await aclassify_intent(client, question, model=model) == "meta_capability":
+        result = capability_result(load_manifest())
+        yield {"type": "delta", "text": result["answer"]}
+        yield {"type": "final", **result}
+        return
     routes = await aretrieve_dual(client, question, vector_store_id=vector_store_id)
     context, sources = build_context_block(routes["law"], routes["judgment"])
     kwargs = _build_dual_kwargs(question, context, model, previous_response_id)

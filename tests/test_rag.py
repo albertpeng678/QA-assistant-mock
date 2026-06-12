@@ -60,7 +60,9 @@ def test_build_dual_kwargs_empty_context_omits_citation_protocol():
     assert full["instructions"] == ANSWER_INSTRUCTIONS + CITATION_PROTOCOL
 
 
-def test_answer_question_uses_dual_retrieval_no_file_search_tool():
+def test_answer_question_uses_dual_retrieval_no_file_search_tool(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "legal_question")
     client = _FakeClient(_fake_response())
     result = answer_question(client, "加班費怎麼算?", vector_store_id="vs_123", model="gpt-4o-mini")
     assert len(client.vector_stores.search_calls) == 2
@@ -118,12 +120,16 @@ def test_parse_response_citations_fallback_to_evidence():
     result = parse_response(SimpleNamespace(output=[fs_call, message]))
     assert result["citations"] == ["個資法-第12條.txt", "個資法-第6條.txt"]
 
-def test_answer_question_chains_previous_response_id():
+def test_answer_question_chains_previous_response_id(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "legal_question")
     client = _FakeClient(_fake_response_with_results())
     answer_question(client, "追問", vector_store_id="vs_1", model="gpt-4o-mini", previous_response_id="resp_abc")
     assert client.responses.calls[0]["previous_response_id"] == "resp_abc"
 
-def test_answer_question_omits_previous_response_id_when_none():
+def test_answer_question_omits_previous_response_id_when_none(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "legal_question")
     client = _FakeClient(_fake_response_with_results())
     answer_question(client, "首問", vector_store_id="vs_1", model="gpt-4o-mini")
     assert "previous_response_id" not in client.responses.calls[0]
@@ -155,7 +161,9 @@ def test_suggest_followups_returns_questions():
 from app.rag import ANSWER_INSTRUCTIONS, CITATION_PROTOCOL, _MODEL_PARAMS
 
 
-def test_answer_question_applies_reasoning_model_params():
+def test_answer_question_applies_reasoning_model_params(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "legal_question")
     client = _FakeClient(_fake_response_with_results())
     answer_question(client, "加班費?", vector_store_id="vs_1", model="gpt-5.4-mini")
     call = client.responses.calls[0]
@@ -348,7 +356,14 @@ def _drain_async(agen):
     return asyncio.run(collect())
 
 
-def test_astream_answer_yields_deltas_then_final():
+async def _async_return(value):
+    """Helper: async function that immediately returns value (for monkeypatching async classify)."""
+    return value
+
+
+def test_astream_answer_yields_deltas_then_final(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
     d1 = SimpleNamespace(type="response.output_text.delta", delta="部分")
     d2 = SimpleNamespace(type="response.output_text.delta", delta="答案")
     completed = SimpleNamespace(type="response.completed", response=_fake_response_with_results())
@@ -757,7 +772,9 @@ def test_aretrieve_dual_awaits_two_routes():
     assert len(out["law"]) == 1 and len(out["judgment"]) == 1
 
 
-def test_astream_dual_retrieves_then_streams_and_finalizes():
+def test_astream_dual_retrieves_then_streams_and_finalizes(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "aclassify_intent", lambda *a, **k: _async_return("legal_question"))
     delta = SimpleNamespace(type="response.output_text.delta", delta="加班費[來源1]")
     completed_resp = SimpleNamespace(
         output=[SimpleNamespace(type="message",
@@ -780,3 +797,32 @@ def test_astream_dual_retrieves_then_streams_and_finalizes():
     final = [i for i in items if i["type"] == "final"][0]
     assert "[^1]" in final["answer"]
     assert final["evidence_mode"] == "dual_cited"
+
+
+# ---- (M) 職能揭露 intent gate ----
+from app.rag import answer_question as _aq, capability_result
+
+
+def test_capability_result_shape():
+    out = capability_result({"doc_type_counts": {"法條": 5}, "categories": ["個資"], "cutoff": "2026-06", "total": 5})
+    assert out["evidence_mode"] == "capability"
+    assert out["citations"] == [] and out["evidence"] == []
+    assert "我能" in out["answer"] and "非正式法律意見" in out["answer"]
+    assert out["status"] == "completed" and out["truncated"] is False
+
+
+def test_answer_question_meta_skips_retrieval(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "meta_capability")
+    client = _FakeClient(_fake_response())          # has vector_stores with search_calls
+    out = _aq(client, "你能做什麼？", vector_store_id="vs_1", model="m")
+    assert out["evidence_mode"] == "capability"
+    assert len(client.vector_stores.search_calls) == 0
+
+
+def test_answer_question_legal_uses_retrieval(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "legal_question")
+    client = _FakeClient(_fake_response())
+    out = _aq(client, "個資法第6條？", vector_store_id="vs_1", model="m")
+    assert len(client.vector_stores.search_calls) == 2
