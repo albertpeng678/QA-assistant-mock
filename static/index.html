@@ -53,7 +53,14 @@
   .answer-prose h3{ font-size:1.05em; color:var(--ink-90); }
   .answer-prose strong{ font-weight:600; color:var(--ink); }
   .answer-prose code{ font-family:ui-monospace,monospace; font-size:.9em; background:var(--ink-08); color:var(--blood); padding:.1em .35em; border-radius:4px; }
-  .answer-prose blockquote{ border-left:3px solid var(--blood); padding-left:.9em; color:var(--ink-70); font-style:italic; }
+  /* caveat / 引言：軟盒（淡底細框圓角，無左槓鑲邊） */
+  .answer-prose blockquote{ background:#7a2e2e0a; border:1px solid var(--ink-12); border-radius:10px; padding:10px 13px; color:var(--ink-70); margin:1em 0 0; }
+  /* 確定性層級 badge（Layer-0，填色 chip） */
+  .tier-badge{ display:inline-flex; align-items:center; font-family:'Public Sans'; font-size:12px; font-weight:700; color:var(--paper); border-radius:12px; padding:3px 11px; margin-bottom:8px; }
+  .tier-badge.tier-explicit{ background:var(--ink); }
+  .tier-badge.tier-interpret{ background:#2e5a52; }
+  .tier-badge.tier-practice{ background:#8a5a12; }
+  .tier-badge.tier-gap{ background:var(--ink-50); }
   .answer-prose sup a{ color:var(--blood); font-weight:700; text-decoration:none; font-size:.7em; padding:0 1px; }
   .cite-ref:focus-visible{ outline:2px solid var(--blood); outline-offset:2px; border-radius:3px; }
 
@@ -193,8 +200,12 @@ const TIER_CLASS = { "明文":"tier-explicit", "解釋/裁量":"tier-interpret",
                      "實務見解":"tier-practice", "語料未涵蓋":"tier-gap" };
 const tierTags = (html) => html.replace(/【(明文|解釋\/裁量|解釋|實務見解|語料未涵蓋)】/g,
   (_, k) => `<span class="tier ${TIER_CLASS[k]}">${k}</span>`);
-// 穩定全文渲染：marked → DOMPurify 淨化 → 腳註上標 + 層級 chip
-const md = (t) => tierTags(footnotes(DOMPurify.sanitize(marked.parse(stripCite(t), { breaks:true, gfm:true }))));
+// 裝置制約：把表格包進 overflow-x-auto，窄螢幕橫向捲動不爆版（Tailwind，無 media query）。
+// 於 DOMPurify 之後包裹（div 為自有可信標記，class 為 Tailwind CDN 提供）。
+const wrapTables = (html) => html.replace(/<table[\s\S]*?<\/table>/g,
+  m => `<div class="overflow-x-auto -mx-1">${m}</div>`);
+// 穩定全文渲染：marked → DOMPurify 淨化 → 表格 overflow 包裹 → 腳註上標 + 層級 chip
+const md = (t) => tierTags(footnotes(wrapTables(DOMPurify.sanitize(marked.parse(stripCite(t), { breaks:true, gfm:true })))));
 
 // 缺口③：串流途中把「尚未成形的尾段」切出來暫緩 render，避免閃現原始 markdown 符號。
 //   - 未閉合 code fence（``` 數為奇數）→ 從最後一個 fence 起暫緩
@@ -393,6 +404,15 @@ function finalizeAnswer(ui, question, answerText, evt){
   // final：以後端 parse 後的權威答案渲染（已把 inline 引用標記轉成腳註 [^N]，依據欄不再空）；
   // 僅在降級/無 final 時才退回串流累積的原文。
   ui.answerEl.innerHTML = md(evt.answer != null ? evt.answer : answerText);
+
+  // 確定性層級 badge（Layer-0，來自後端 classify_tier，可靠；取代內文逐句【明文】標記）
+  const TIER_LABEL = { "明文":"明文規定", "解釋/裁量":"解釋/裁量", "實務見解":"實務見解", "語料未涵蓋":"語料未涵蓋" };
+  if(evt.tier && TIER_LABEL[evt.tier]){
+    const b = document.createElement("div");
+    b.className = "tier-badge tier-" + ({ "明文":"explicit", "解釋/裁量":"interpret", "實務見解":"practice", "語料未涵蓋":"gap" }[evt.tier]);
+    b.textContent = TIER_LABEL[evt.tier];
+    ui.answerEl.before(b);
+  }
 
   // 缺口提示：dual_retrieved 且有檢索到參考條文時，誠實標示超出精準涵蓋範圍
   // （完全無證據＝語料未涵蓋，靠答案內【語料未涵蓋】層級表達，不在此重複提示）
