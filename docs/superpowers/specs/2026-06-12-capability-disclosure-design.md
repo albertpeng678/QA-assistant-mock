@@ -80,10 +80,19 @@ _INTENT_SCHEMA = {"type":"json_schema","name":"intent","strict":True,"schema":{
 `evidence_mode=="dual_retrieved"`（模型未精準引用、退回全部檢索段）時，前端在答案頂部插一行：
 > 「本題超出語料直接涵蓋範圍，以下依相關度排列參考條文，未必逐句對應；建議查閱判決資料庫或諮詢法律顧問。」
 
-### 4.4 前端 UI（定案視覺）
-- **空狀態 A**：開場一句範疇（讀 `/api/capability`）＋ 6 個領域能力卡，每卡 1 個可點範例問題（NN/g：可點 cards、具體、貼近輸入）。
-- **「關於本助理」範疇卡**（側欄）：無引用時顯示涵蓋（doc_type 件數＋領域 pills）／尚未涵蓋／語料截止；**有引用時自動換回證據卡**。**禁用 emoji。**
-- 既有 starter 區改為領域能力卡資料來源 = `/api/capability`。
+### 4.4 前端 UI（定案視覺，已過 visual companion 審核）
+
+**真實版面前提（務必遵守）**：現有 `static/index.html` 為**全裝置單欄置中**（`#thread.max-w-3xl.mx-auto`）、**無任何 `@media` 斷點**；頂列 ink 深色 header 含左側 hamburger（`#ham`）；證據面板是**左滑 offcanvas 抽屜**（`#offcanvas`，桌機 340px／手機 `max-86vw`），非常駐側欄。空狀態現為 `.chip.starter` 血框 pill。**所有新 UI 必須沿用此真實結構與既有 class/設計 token（ink/paper/blood＋低飽和輔色），不得新增側欄或 media query。**
+
+**六個狀態（mockup 已核可）：**
+1. **空狀態**：`#thread` 內 — 開場一句範疇（讀 `/api/capability`）＋ 6 個領域能力卡（CSS grid，桌機 3 欄／窄屏自然降為 2／1 欄），每卡 1 個可點範例問題（NN/g：可點、具體、貼近輸入）。沿用現有 `renderStarters` 進入點改為渲染領域卡。
+2. **能力回答**：`meta_capability` 答案以一般 message 渲染在 `#thread`（能幫你的／涵蓋語料／不能做／免責），套用 markdown 語意配色；不顯示引證計數徽章。
+3. **一般答案 + markdown 語意配色**：見 §4.5；現有問答一併套用。
+4. **缺口提示**：見 §4.3，`dual_retrieved` 時答案頂部插一行。
+5. **offcanvas「關於本助理」範疇卡**：`evidence_mode∈{capability}` 或無引用時，`#oc-body` 頂部顯示範疇卡（doc_type 件數＋領域 pills／尚未涵蓋／語料截止，讀 `/api/capability`）；**有引用時自動換回既有證據卡**。**全程禁用 emoji。**
+6. **offcanvas 引證依據（含判決卡）**：既有行為不變（標題「答案引用來源」、判決卡無 url 走「展開全文」優雅降級）。
+
+**RWD**：不新增斷點；領域卡用 `grid-template-columns: repeat(auto-fit, minmax(...))` 自然適配寬度；offcanvas 既有 `max-width:86vw` 已處理手機。桌機/平板/手機僅差卡片欄數與抽屜寬。
 
 ### 4.5 markdown 語意配色（context7/marked 主流解法）
 marked custom renderer 給元素掛 class（或直接以 `.answer-prose` 元素選擇器），CSS 上色。**套用所有答案（含現有問答）**。配色（嚴守低飽和，墨 `#1a1714`／血 `#7a2e2e` 為主＋2 低飽和輔色）：
