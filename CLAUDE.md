@@ -22,7 +22,7 @@
 - **引證（確定性，來自檢索）**：citations/evidence 由 `retrieve_dual` 結果確定性組出（非解析 model annotations）；模型標 `[來源N]` → linkify 成 `[^N]` 腳註（`evidence_mode="dual_cited"`），未標則顯示全部檢索段（`dual_retrieved`）。舊 `parse_response`/`_build_answer_kwargs`（file_search 路）保留作回滾。
 - **職能揭露（capability disclosure）**：`app/capability.py` 的 intent gate——`answer_question`/`astream_answer` 先 `classify_intent`（structured output）；meta/能力問題（「你能做什麼／涵蓋哪些」）→ `capability_answer(load_manifest())` 模板化作答、`evidence_mode="capability"`、**跳過 `retrieve_dual`**（分類壞掉退 `legal_question` 不退化）。能力清單由 `scripts/build_capability_manifest.py` 查向量庫 doc_type×category 產出 `app/capability_manifest.json`，經 `GET /api/capability` 給前端。前端：空狀態走「漸進揭露」領域 tag→範例（讀 /api/capability）、markdown 語意配色（H2 血紅/code 血紅/確定性層級填色 chip 墨·teal·amber·灰）、`dual_retrieved` 且有證據時顯缺口提示。
 - **輸出格式**：`ANSWER_INSTRUCTIONS` 走「表格為主（智慧判斷）＋ 確定性分層【明文】【解釋/裁量】【實務見解】【語料未涵蓋】＋ 區分『法律未明文 vs 語料未收錄』」。前端 `static/index.html` 串流時緩衝未成形表格（`splitUnstableTail`/`renderStream`），證據用 `.legal-pre` 保留換行，原文以官方 url 外連。
-- **語料（`data/`，~2074 檔上傳）**：法條 1042 + 施行細則 197 + 函釋 666 + FAQ 169（皆真實政府開放資料）。doc_type ∈ {法條, 施行細則, 函釋, FAQ, 判決, 裁罰}。**判決尚缺**（司法院 API 需帳密+限時段）。
+- **語料（`data/`）**：法條 1163 + 施行細則 197 + 函釋 666 + FAQ 169（皆真實政府開放資料）。doc_type ∈ {法條, 施行細則, 函釋, FAQ, 判決, 裁罰}。**判決**：PoC 106（202603）已上傳；24 月批（~1.18 萬）以 Playwright 登入 opendata + `build_judgment_corpus.py` 爬取分類後 append 上傳中。上傳完成後需重跑 `scripts/build_capability_manifest.py` 更新 `app/capability_manifest.json`。
 - **語料來源**：法律檔 `AuData=CF`、命令檔（施行細則）`AuData=CM`；函釋/FAQ 為各主管機關開放資料/官網問答，**檔名 `{簡稱}-{doc_type}-{標題}.txt`、首行管線 metadata**（`來源|效力|字號|發文日|對應條號|母法`）。
 - **vector store**：`vs_6a27e1fb471c8191aad6e549fb7f2492`（**單一、用 append 維護**，勿每次新建）。
 

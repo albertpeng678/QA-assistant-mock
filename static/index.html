@@ -238,7 +238,9 @@ async function renderStarters(){
   let manifest = state.capabilityManifest;
   if(!manifest){ try{ const r = await fetch("/api/capability"); if(r.ok){ manifest = await r.json(); state.capabilityManifest = manifest; } }catch{} }
   manifest = manifest || {};
-  const cats = (manifest.categories && manifest.categories.length) ? manifest.categories : Object.keys(DOMAIN_EXAMPLES);
+  // 只顯示「有範例題」的領域（manifest 可能含「其他」等無範例的 catch-all → 過濾，避免空面板）
+  let cats = (manifest.categories || []).filter(c => DOMAIN_EXAMPLES[c]);
+  if(!cats.length) cats = Object.keys(DOMAIN_EXAMPLES);
   const dc = manifest.doc_type_counts || {};
   const scope = ["法條","施行細則","函釋","FAQ","判決"].filter(k=>dc[k]).join("・") || "法條・函釋・FAQ・判決";
   const box = document.createElement("div");
