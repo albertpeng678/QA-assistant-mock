@@ -2,6 +2,7 @@
 判決上傳後重跑即更新。用法：python scripts/build_capability_manifest.py"""
 import json
 import os
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def build_manifest(client, vector_store_id):
             if cat:
                 categories.add(cat)
             eff = (attrs.get("effective_date") or "") if isinstance(attrs, dict) else ""
-            if eff > latest:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", eff) and eff > latest:
                 latest = eff
         if not page.has_more:
             break

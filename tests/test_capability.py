@@ -31,6 +31,16 @@ def _f(doc_type, category="個資", eff="2026-03-01"):
     return SimpleNamespace(id="f", attributes={"doc_type": doc_type, "category": category, "effective_date": eff})
 
 
+def test_build_manifest_ignores_non_date_effective_date():
+    files = [
+        _f("法條", eff="2026-05-10"),
+        _f("函釋", eff="未標明"),
+        _f("判決", eff="2024-03-01"),
+    ]
+    m = bcm.build_manifest(_FakeClient(files), "vs_x")
+    assert m["cutoff"] == "2026-05"
+
+
 def test_build_manifest_counts_by_doc_type_and_category():
     files = [_f("法條"), _f("法條"), _f("函釋"), _f("判決", "勞動", "2026-05-10"), _f("判決", "個資", "2024-03-01")]
     m = bcm.build_manifest(_FakeClient(files), "vs_x")
