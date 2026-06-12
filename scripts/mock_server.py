@@ -16,18 +16,15 @@ app = FastAPI()
 STATIC = Path(__file__).resolve().parent.parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-# 反映新輸出：表格為主（缺口②③）+ 確定性層級標籤（缺口⑦）+ 腳註引用
+# 反映新輸出：BLUF-first + 表格（≤3欄）+ 確定性層級標籤（缺口⑦）+ 腳註引用 + 末尾 blockquote 免責
 ANSWER = (
-    "發生個人資料外洩時，應依下列步驟通知當事人並通報主管機關：\n\n"
-    "| 步驟 | 法規依據 | 重點說明 |\n"
-    "|---|---|---|\n"
-    "| 查明並通知當事人 | 個人資料保護法第12條 | 應於查明後以適當方式通知當事人[^1] |\n"
-    "| 通報主管機關 | 個人資料保護法第22條 | 公務機關應通報目的事業主管機關[^2] |\n"
-    "| 屆期未改正按次處罰 | 個人資料保護法第48條 | 得按次處新臺幣罰鍰[^3] |\n\n"
-    "【明文】上述通知與通報義務於條文有明文規定。\n\n"
-    "【解釋/裁量】「適當方式」屬解釋空間，實務上依個案性質認定。\n\n"
-    "【實務見解】臺北地院曾就未即時通知認定須負損害賠償責任[^4]。\n\n"
-    "本回答為研究輔助，非正式法律意見。"
+    "**重大消息公開滿 18 小時後**才能買賣股票（證交法§157-1）。\n\n"
+    "- 消息明確後到公開前、公開後 18 小時內，都不得買賣（§157-1）。[^1]\n"
+    "- 對象不只內部人：董事、經理人、大股東、離職未滿 6 個月者也算（§157-1）。[^2]\n"
+    "- 「滿 18 小時」從實際公開時間起算，不是公告當天（金管會FAQ）。[^3]\n\n"
+    "| 情境 | 可否交易 | 依據 |\n|---|---|---|\n"
+    "| 公開前 | 不可 | `§157-1` |\n| 公開後18小時內 | 不可 | `§157-1` |\n| 滿18小時後 | 可 | `§157-1` |\n\n"
+    "> 提醒：重大消息成立時點屬個案認定，建議諮詢專業律師。本回答為研究輔助，非正式法律意見。"
 )
 _URL = "https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=I0050021&flno={}"
 EVIDENCE = [
@@ -105,7 +102,8 @@ async def ask_stream(req: Request):
                 yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
                 time.sleep(0.02)
             final = {"type": "final", "answer": ans, "citations": [], "evidence": [],
-                     "evidence_mode": "dual_retrieved", "response_id": "resp_nc", "query_log_id": 4}
+                     "evidence_mode": "dual_retrieved", "tier": "語料未涵蓋",
+                     "response_id": "resp_nc", "query_log_id": 4}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
             yield "data: [DONE]\n\n"
             return
@@ -121,7 +119,7 @@ async def ask_stream(req: Request):
                 yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
                 time.sleep(0.02)
             final = {"type": "final", "answer": GAP_ANSWER, "citations": [EVIDENCE[0]["filename"]],
-                     "evidence": [EVIDENCE[0]], "evidence_mode": "dual_retrieved",
+                     "evidence": [EVIDENCE[0]], "evidence_mode": "dual_retrieved", "tier": "解釋/裁量",
                      "response_id": "resp_gap", "query_log_id": 3}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
             yield "data: [DONE]\n\n"
@@ -159,7 +157,7 @@ async def ask_stream(req: Request):
             time.sleep(0.04)
         if not no_final:
             final = {"type": "final", "answer": ANSWER, "citations": CITES,
-                     "evidence": EVIDENCE, "evidence_mode": "dual_cited",
+                     "evidence": EVIDENCE, "evidence_mode": "dual_cited", "tier": "明文",
                      "response_id": "resp_mock", "query_log_id": 1}
             yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
         yield "data: [DONE]\n\n"
