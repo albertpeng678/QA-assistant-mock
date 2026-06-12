@@ -94,8 +94,21 @@ async def ask_stream(req: Request):
     # 職能揭露鉤子：__META__ 能力回答（capability 模式、不檢索）；__GAP__ 缺口提示（dual_retrieved）。
     meta = "__META__" in question
     gap = "__GAP__" in question
+    nocover = "__NOCOVER__" in question  # 語料未涵蓋：無證據、語料未涵蓋層級
 
     def gen():
+        if nocover:
+            ans = ("【語料未涵蓋】本系統語料目前未收錄此主題的條文、函釋或判決，"
+                   "無法提供可審查的依據。建議查詢其他法規資料庫或諮詢專業律師。\n\n"
+                   "本回答為研究輔助，非正式法律意見。")
+            for ch in [ans[i:i+12] for i in range(0, len(ans), 12)]:
+                yield "data: " + json.dumps({"type": "delta", "text": ch}, ensure_ascii=False) + "\n\n"
+                time.sleep(0.02)
+            final = {"type": "final", "answer": ans, "citations": [], "evidence": [],
+                     "evidence_mode": "dual_retrieved", "response_id": "resp_nc", "query_log_id": 4}
+            yield "data: " + json.dumps(final, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
         if meta:
             yield "data: " + json.dumps({"type": "delta", "text": META_ANSWER}, ensure_ascii=False) + "\n\n"
             final = {"type": "final", "answer": META_ANSWER, "citations": [], "evidence": [],
