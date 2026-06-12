@@ -142,3 +142,26 @@ def test_capability_answer_filters_catch_all_其他():
     # 「其他」catch-all 不應出現在法令領域；個資/勞動 仍在
     assert "其他" not in ans
     assert "個資" in ans and "勞動" in ans
+
+
+import asyncio as _aio2
+from app.capability import classify_tier, aclassify_tier, TIER_VALUES
+
+
+def test_tier_values():
+    assert TIER_VALUES == ["明文", "解釋/裁量", "實務見解", "語料未涵蓋"]
+
+
+def test_classify_tier_parses_enum():
+    c = _FakeIntentClient('{"tier": "實務見解"}')
+    assert classify_tier(c, "q", "context", model="m") == "實務見解"
+
+
+def test_classify_tier_bad_json_falls_back():
+    c = _FakeIntentClient("garbage")
+    assert classify_tier(c, "q", "ctx", model="m") == "語料未涵蓋"
+
+
+def test_aclassify_tier():
+    out = _aio2.run(aclassify_tier(_FakeAIntentClient('{"tier":"明文"}'), "q", "ctx", model="m"))
+    assert out == "明文"
