@@ -323,6 +323,21 @@ def retrieve_dual(client, query, *, vector_store_id,
     return {"law": law.data, "judgment": judgment.data}
 
 
+async def aretrieve_dual(client, query, *, vector_store_id,
+                         law_k=LAW_TOP_K, law_threshold=DUAL_LAW_THRESHOLD,
+                         judgment_m=JUDGMENT_TOP_M, judgment_threshold=DUAL_JUDGMENT_THRESHOLD):
+    """retrieve_dual 的 async 版（AsyncOpenAI 用）：await 兩路 vector_stores.search。"""
+    law = await client.vector_stores.search(
+        vector_store_id=vector_store_id, query=query, max_num_results=law_k,
+        filters={"type": "ne", "key": "doc_type", "value": "判決"},
+        ranking_options={"score_threshold": law_threshold})
+    judgment = await client.vector_stores.search(
+        vector_store_id=vector_store_id, query=query, max_num_results=judgment_m,
+        filters={"type": "eq", "key": "doc_type", "value": "判決"},
+        ranking_options={"score_threshold": judgment_threshold})
+    return {"law": law.data, "judgment": judgment.data}
+
+
 def _result_text(r):
     """取一筆 vector_stores.search result 的文字：content[] 串接；無則退回 .text。"""
     content = getattr(r, "content", None)
@@ -492,11 +507,10 @@ def _build_dual_kwargs(question, context, model, previous_response_id):
 
 
 def stream_answer(client, question, *, vector_store_id, model, previous_response_id=None):
-    """SSE 串流問答：逐事件 yield {"type":"delta","text":...}，最後 yield {"type":"final", **parse_response(final)}。
-
-    事件型別判斷採容錯策略，相容 OpenAI Responses 串流事件物件的差異。
-    """
-    kwargs = _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
+    """SSE 串流問答（同步）：雙路檢索 → 串流生成 → final 由 parse_dual_response 組。"""
+    routes = retrieve_dual(client, question, vector_store_id=vector_store_id)
+    context, sources = build_context_block(routes["law"], routes["judgment"])
+    kwargs = _build_dual_kwargs(question, context, model, previous_response_id)
     kwargs["stream"] = True
     final_response = None
     for event in client.responses.create(**kwargs):
@@ -505,23 +519,18 @@ def stream_answer(client, question, *, vector_store_id, model, previous_response
         if terminal is not None:
             final_response = terminal
             continue
-        # 只接受答案文字增量事件（output_text.delta）；推理模型的 reasoning/function_call
-        # delta 事件雖也帶 .delta 屬性，但屬思考鏈，不可洩漏進答案串流。
         delta = getattr(event, "delta", None)
         if event_type.endswith("output_text.delta") and isinstance(delta, str):
             yield {"type": "delta", "text": delta}
     if final_response is not None:
-        yield {"type": "final", **parse_response(final_response)}
+        yield {"type": "final", **parse_dual_response(final_response, sources)}
 
 
 async def astream_answer(client, question, *, vector_store_id, model, previous_response_id=None):
-    """SSE 串流問答的「非阻塞」版本（缺口①）。
-
-    用 AsyncOpenAI + `async for`，避免同步 Stream 在 async generator 內阻塞 event loop、
-    導致 token 批次沖出（非逐字）。事件語意與 stream_answer 相同：
-    逐 output_text.delta yield {"type":"delta",...}，最後 yield {"type":"final", **parse_response}。
-    """
-    kwargs = _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
+    """SSE 串流問答（非阻塞 async）：先 await 雙路檢索組 context，再 async 串流生成。"""
+    routes = await aretrieve_dual(client, question, vector_store_id=vector_store_id)
+    context, sources = build_context_block(routes["law"], routes["judgment"])
+    kwargs = _build_dual_kwargs(question, context, model, previous_response_id)
     kwargs["stream"] = True
     final_response = None
     stream = await client.responses.create(**kwargs)
@@ -535,7 +544,7 @@ async def astream_answer(client, question, *, vector_store_id, model, previous_r
         if event_type.endswith("output_text.delta") and isinstance(delta, str):
             yield {"type": "delta", "text": delta}
     if final_response is not None:
-        yield {"type": "final", **parse_response(final_response)}
+        yield {"type": "final", **parse_dual_response(final_response, sources)}
 
 
 _FOLLOWUP_SCHEMA = {

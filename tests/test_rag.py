@@ -211,8 +211,9 @@ def test_stream_answer_yields_deltas_then_final():
     assert events[1] == {"type": "delta", "text": "答案"}
     final = events[2]
     assert final["type"] == "final"
-    assert final["citations"] == ["個資法-第12條.txt"]
-    assert final["evidence"][0]["score"] == 0.91
+    # 雙路後 citations 來自 sources（_FakeVS 回傳）：法條路 + 判決路各一筆
+    assert final["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-案.txt"]
+    assert final["evidence"][0]["score"] == 0.6
     assert final["response_id"] == "resp_abc"
     # 串流啟用且套用推理參數
     call = client.responses.calls[0]
@@ -345,7 +346,8 @@ def test_astream_answer_yields_deltas_then_final():
     assert events[0] == {"type": "delta", "text": "部分"}
     assert events[1] == {"type": "delta", "text": "答案"}
     assert events[2]["type"] == "final"
-    assert events[2]["citations"] == ["個資法-第12條.txt"]
+    # 雙路後 citations 來自 sources（_FakeAsyncVS 回傳）：法條路 + 判決路各一筆
+    assert events[2]["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-案.txt"]
     assert client.responses.calls[0]["stream"] is True
     assert client.responses.calls[0]["reasoning"] == {"effort": "low"}
 
@@ -581,7 +583,8 @@ def test_stream_answer_emits_final_on_incomplete():
     assert events[0] == {"type": "delta", "text": "部分答案"}
     final = events[-1]
     assert final["type"] == "final"
-    assert final["citations"] == ["個資法-第12條.txt"]
+    # 雙路後 citations 來自 sources（_FakeVS 回傳）：法條路 + 判決路各一筆
+    assert final["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-案.txt"]
     assert final["truncated"] is True
 
 
@@ -597,7 +600,8 @@ def test_astream_answer_emits_final_on_incomplete():
     final = events[-1]
     assert final["type"] == "final"
     assert final["truncated"] is True
-    assert final["citations"] == ["個資法-第12條.txt"]
+    # 雙路後 citations 來自 sources（_FakeAsyncVS 回傳）：法條路 + 判決路各一筆
+    assert final["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-案.txt"]
 
 
 def test_suggest_followups_graceful_on_bad_output():
@@ -718,3 +722,87 @@ def test_parse_dual_repeated_marker_reuses_footnote():
     assert out["answer"].count("[^1]") == 2      # 同來源重複引用 → 同腳註號
     assert "[^2]" in out["answer"]
     assert out["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-資遣費案.txt"]
+
+
+# ---- (L) 串流走雙路：先檢索組 context，再串流；final 由 parse_dual_response 組 ----
+import asyncio as _asyncio
+from app.rag import astream_answer as _astream, aretrieve_dual
+
+
+class _FakeAsyncVS:
+    def __init__(self):
+        self.search_calls = []
+
+    async def search(self, **kwargs):
+        self.search_calls.append(kwargs)
+        is_j = (kwargs.get("filters") or {}).get("type") == "eq"
+        dt = "判決" if is_j else "法條"
+        fn = "臺北地院-判決-案.txt" if is_j else "勞動基準法-第24條.txt"
+        return SimpleNamespace(data=[SimpleNamespace(
+            filename=fn, score=0.6, attributes={"doc_type": dt},
+            content=[SimpleNamespace(type="text", text=f"{dt}內容")])])
+
+
+class _FakeAsyncStream:
+    def __init__(self, events):
+        self._events = events
+
+    def __aiter__(self):
+        async def gen():
+            for e in self._events:
+                yield e
+        return gen()
+
+
+class _FakeAsyncResponses:
+    def __init__(self, events):
+        self._events = events
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeAsyncStream(self._events)
+
+
+class _FakeAsyncClient:
+    def __init__(self, events):
+        self.responses = _FakeAsyncResponses(events)
+        self.vector_stores = _FakeAsyncVS()
+
+
+def test_aretrieve_dual_awaits_two_routes():
+    client = _FakeAsyncClient([])
+
+    async def run():
+        return await aretrieve_dual(client, "q", vector_store_id="vs_1")
+
+    out = _asyncio.run(run())
+    assert len(client.vector_stores.search_calls) == 2
+    assert client.vector_stores.search_calls[0]["filters"] == {"type": "ne", "key": "doc_type", "value": "判決"}
+    assert client.vector_stores.search_calls[1]["filters"] == {"type": "eq", "key": "doc_type", "value": "判決"}
+    assert len(out["law"]) == 1 and len(out["judgment"]) == 1
+
+
+def test_astream_dual_retrieves_then_streams_and_finalizes():
+    delta = SimpleNamespace(type="response.output_text.delta", delta="加班費[來源1]")
+    completed_resp = SimpleNamespace(
+        output=[SimpleNamespace(type="message",
+                                content=[SimpleNamespace(text="加班費[來源1]", annotations=[])])],
+        id="resp_s", usage=None, status="completed", incomplete_details=None)
+    completed = SimpleNamespace(type="response.completed", response=completed_resp)
+    client = _FakeAsyncClient([delta, completed])
+
+    async def run():
+        items = []
+        async for it in _astream(client, "加班費?", vector_store_id="vs_1", model="m"):
+            items.append(it)
+        return items
+
+    items = _asyncio.run(run())
+    assert len(client.vector_stores.search_calls) == 2
+    assert "tools" not in client.responses.calls[0]
+    assert "檢索到的依據" in client.responses.calls[0]["input"]
+    assert any(i["type"] == "delta" for i in items)
+    final = [i for i in items if i["type"] == "final"][0]
+    assert "[^1]" in final["answer"]
+    assert final["evidence_mode"] == "dual_cited"
