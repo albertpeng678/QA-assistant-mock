@@ -168,7 +168,7 @@ def test_answer_question_applies_reasoning_model_params(monkeypatch):
     answer_question(client, "加班費?", vector_store_id="vs_1", model="gpt-5.4-mini")
     call = client.responses.calls[0]
     assert call["reasoning"] == {"effort": "low"}
-    assert call["text"]["verbosity"] == "medium"
+    assert call["text"]["verbosity"] == "low"
     assert call["max_output_tokens"] == 4096  # 推理模型需更多輸出預算，避免 incomplete 截斷
     assert call["instructions"] == ANSWER_INSTRUCTIONS + CITATION_PROTOCOL
     # 推理模型不可帶 temperature/top_p
@@ -828,3 +828,17 @@ def test_answer_question_legal_uses_retrieval(monkeypatch):
     client = _FakeClient(_fake_response())
     out = _aq(client, "個資法第6條？", vector_store_id="vs_1", model="m")
     assert len(client.vector_stores.search_calls) == 2
+
+
+def test_verbosity_is_low():
+    from app.rag import _MODEL_PARAMS
+    assert _MODEL_PARAMS["text"]["verbosity"] == "low"
+
+
+def test_answer_question_attaches_tier(monkeypatch):
+    import app.rag as rag
+    monkeypatch.setattr(rag, "classify_intent", lambda *a, **k: "legal_question")
+    monkeypatch.setattr(rag, "classify_tier", lambda *a, **k: "明文")
+    client = _FakeClient(_fake_response())
+    out = rag.answer_question(client, "個資外洩?", vector_store_id="vs_1", model="m")
+    assert out["tier"] == "明文"
