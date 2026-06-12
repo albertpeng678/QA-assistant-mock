@@ -460,6 +460,7 @@ def test_parse_response_out_of_range_marker_dropped_safely():
 # 根因：推理模型 gpt-5.4-mini 撞 max_output_tokens 時，Responses API 以 status="incomplete"
 # 結束、終結串流事件為 response.incomplete（非 completed）。原碼只認 completed → 永不發 final
 # → 答案截斷且無 citations/evidence/followups。下列測試鎖死「截斷時仍須發出 final」。
+# 註：此 fixture 為舊 file_search 形狀，dual 流會略過 file_search_call/annotations，僅用其 status/incomplete 旗標。
 def _fake_incomplete_response():
     ann = SimpleNamespace(type="file_citation", file_id="file-A", filename="個資法-第12條.txt")
     content = SimpleNamespace(text="部分答案被截斷", annotations=[ann])
@@ -740,7 +741,6 @@ def test_parse_dual_repeated_marker_reuses_footnote():
 
 
 # ---- (L) 串流走雙路：先檢索組 context，再串流；final 由 parse_dual_response 組 ----
-import asyncio as _asyncio
 from app.rag import astream_answer as _astream, aretrieve_dual
 
 
@@ -750,7 +750,7 @@ def test_aretrieve_dual_awaits_two_routes():
     async def run():
         return await aretrieve_dual(client, "q", vector_store_id="vs_1")
 
-    out = _asyncio.run(run())
+    out = asyncio.run(run())
     assert len(client.vector_stores.search_calls) == 2
     assert client.vector_stores.search_calls[0]["filters"] == {"type": "ne", "key": "doc_type", "value": "判決"}
     assert client.vector_stores.search_calls[1]["filters"] == {"type": "eq", "key": "doc_type", "value": "判決"}
@@ -772,7 +772,7 @@ def test_astream_dual_retrieves_then_streams_and_finalizes():
             items.append(it)
         return items
 
-    items = _asyncio.run(run())
+    items = asyncio.run(run())
     assert len(client.vector_stores.search_calls) == 2
     assert "tools" not in client.responses.calls[0]
     assert "檢索到的依據" in client.responses.calls[0]["input"]

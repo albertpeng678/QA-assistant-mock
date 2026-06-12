@@ -54,7 +54,6 @@ import argparse
 import json
 import os
 import re
-import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass

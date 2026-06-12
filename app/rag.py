@@ -7,6 +7,7 @@ tests/test_rag.py 內有現成的失敗測試，你的目標是讓它們全部�
     git show solution:app/rag.py
 """
 
+import asyncio
 import json
 import re
 
@@ -326,15 +327,18 @@ def retrieve_dual(client, query, *, vector_store_id,
 async def aretrieve_dual(client, query, *, vector_store_id,
                          law_k=LAW_TOP_K, law_threshold=DUAL_LAW_THRESHOLD,
                          judgment_m=JUDGMENT_TOP_M, judgment_threshold=DUAL_JUDGMENT_THRESHOLD):
-    """retrieve_dual 的 async 版（AsyncOpenAI 用）：await 兩路 vector_stores.search。"""
-    law = await client.vector_stores.search(
-        vector_store_id=vector_store_id, query=query, max_num_results=law_k,
-        filters={"type": "ne", "key": "doc_type", "value": "判決"},
-        ranking_options={"score_threshold": law_threshold})
-    judgment = await client.vector_stores.search(
-        vector_store_id=vector_store_id, query=query, max_num_results=judgment_m,
-        filters={"type": "eq", "key": "doc_type", "value": "判決"},
-        ranking_options={"score_threshold": judgment_threshold})
+    """retrieve_dual 的 async 版（AsyncOpenAI 用）：兩路獨立，用 asyncio.gather 並行檢索
+    （串流前等待時間從 law+judgment 降為 max(law, judgment)）。"""
+    law, judgment = await asyncio.gather(
+        client.vector_stores.search(
+            vector_store_id=vector_store_id, query=query, max_num_results=law_k,
+            filters={"type": "ne", "key": "doc_type", "value": "判決"},
+            ranking_options={"score_threshold": law_threshold}),
+        client.vector_stores.search(
+            vector_store_id=vector_store_id, query=query, max_num_results=judgment_m,
+            filters={"type": "eq", "key": "doc_type", "value": "判決"},
+            ranking_options={"score_threshold": judgment_threshold}),
+    )
     return {"law": law.data, "judgment": judgment.data}
 
 
