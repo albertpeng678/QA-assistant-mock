@@ -17,8 +17,9 @@
 > 詳見 `docs/superpowers/specs/2026-06-09-legal-rag-7fixes-design.md`（含程式介面、attributes schema、語料盤點、驗證）。
 
 - **問答管線**：`app/rag.py` `answer_question`(同步) / `astream_answer`(async，SSE 用) → `parse_response` 回 `{answer, citations, evidence, evidence_mode, response_id, usage}`。
-- **SSE 逐字串流**：`/api/ask/stream` 用 `AsyncOpenAI` + `astream_answer`（同步 Stream 放 async generator 會阻塞 event loop，是逐字失效的根因）；DB log 走 `run_in_threadpool`。
-- **引證（只顯示被引用）**：annotations 有就過濾被引用檔（`evidence_mode="cited"`）；空就退回 top-5 by score（`retrieved`，`EVIDENCE_DISPLAY_LIMIT`）。gpt-5.4-mini annotations 常空，故多走 top-5。
+- **檢索分流（已上線）**：問答管線改走 `retrieve_dual` 單庫雙路檢索——法條路（`doc_type≠判決`，top-12）+ 判決路（`doc_type=判決`，top-3、門檻 0.35），各設名額避免判決被高分法條擠光。`answer_question`/`stream_answer`/`astream_answer` 皆先檢索 → `build_context_block` 自組 context（**不帶 file_search tool**）→ 餵 Responses API → `parse_dual_response`。`aretrieve_dual` 用 `asyncio.gather` 並行兩路。判決留庫內、靠 filter 分流（**不刪檔**）。
+- **SSE 逐字串流**：`/api/ask/stream` 用 `AsyncOpenAI` + `astream_answer`（同步 Stream 放 async generator 會阻塞 event loop，是逐字失效的根因）；串流前先 await `aretrieve_dual` 組 context，DB log 走 `run_in_threadpool`。
+- **引證（確定性，來自檢索）**：citations/evidence 由 `retrieve_dual` 結果確定性組出（非解析 model annotations）；模型標 `[來源N]` → linkify 成 `[^N]` 腳註（`evidence_mode="dual_cited"`），未標則顯示全部檢索段（`dual_retrieved`）。舊 `parse_response`/`_build_answer_kwargs`（file_search 路）保留作回滾。
 - **輸出格式**：`ANSWER_INSTRUCTIONS` 走「表格為主（智慧判斷）＋ 確定性分層【明文】【解釋/裁量】【實務見解】【語料未涵蓋】＋ 區分『法律未明文 vs 語料未收錄』」。前端 `static/index.html` 串流時緩衝未成形表格（`splitUnstableTail`/`renderStream`），證據用 `.legal-pre` 保留換行，原文以官方 url 外連。
 - **語料（`data/`，~2074 檔上傳）**：法條 1042 + 施行細則 197 + 函釋 666 + FAQ 169（皆真實政府開放資料）。doc_type ∈ {法條, 施行細則, 函釋, FAQ, 判決, 裁罰}。**判決尚缺**（司法院 API 需帳密+限時段）。
 - **語料來源**：法律檔 `AuData=CF`、命令檔（施行細則）`AuData=CM`；函釋/FAQ 為各主管機關開放資料/官網問答，**檔名 `{簡稱}-{doc_type}-{標題}.txt`、首行管線 metadata**（`來源|效力|字號|發文日|對應條號|母法`）。
