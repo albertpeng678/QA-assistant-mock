@@ -645,3 +645,47 @@ def test_result_text_empty_content_falls_back_to_text():
     from app.rag import _result_text
     r = SimpleNamespace(content=[], text="後備文字")
     assert _result_text(r) == "後備文字"
+
+
+# ---- (K) parse_dual_response：引用/證據來自檢索結果 ----
+from app.rag import parse_dual_response
+
+
+def _msg(text):
+    content = SimpleNamespace(text=text, annotations=[])
+    msg = SimpleNamespace(type="message", content=[content])
+    return SimpleNamespace(output=[msg], id="resp_dual", usage=None, status="completed",
+                           incomplete_details=None)
+
+
+_SOURCES = [
+    {"filename": "勞動基準法-第24條.txt", "text": "加班費…", "score": 0.82, "doc_type": "法條"},
+    {"filename": "臺北地院-判決-資遣費案.txt", "text": "本院認…", "score": 0.40, "doc_type": "判決"},
+]
+
+
+def test_parse_dual_cited_maps_markers_to_footnotes():
+    resp = _msg("加班費依規定計算[來源1]，實務見解參此[來源2]。")
+    out = parse_dual_response(resp, _SOURCES)
+    assert out["evidence_mode"] == "dual_cited"
+    assert "[^1]" in out["answer"] and "[^2]" in out["answer"]
+    assert "[來源1]" not in out["answer"]
+    assert out["citations"] == ["勞動基準法-第24條.txt", "臺北地院-判決-資遣費案.txt"]
+    assert [e["filename"] for e in out["evidence"]] == out["citations"]
+    assert out["response_id"] == "resp_dual"
+
+
+def test_parse_dual_retrieved_when_no_markers():
+    resp = _msg("加班費依規定計算，無標來源。")
+    out = parse_dual_response(resp, _SOURCES)
+    assert out["evidence_mode"] == "dual_retrieved"
+    assert len(out["evidence"]) == 2
+    assert out["citations"] == [s["filename"] for s in _SOURCES]
+
+
+def test_parse_dual_drops_out_of_range_marker():
+    resp = _msg("引用越界[來源9]應安全丟棄。")
+    out = parse_dual_response(resp, _SOURCES)
+    assert "[^" not in out["answer"]
+    assert "[來源9]" not in out["answer"]
+    assert out["evidence_mode"] == "dual_retrieved"

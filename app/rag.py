@@ -179,6 +179,26 @@ def _evidence_for_files(filenames, all_results):
     return out
 
 
+def _response_meta(response):
+    """抽出 response_id / usage / status / 截斷資訊（parse_response 與 parse_dual_response 共用）。"""
+    usage_obj = getattr(response, "usage", None)
+    usage = {
+        "input_tokens": getattr(usage_obj, "input_tokens", 0) or 0,
+        "output_tokens": getattr(usage_obj, "output_tokens", 0) or 0,
+        "total_tokens": getattr(usage_obj, "total_tokens", 0) or 0,
+    }
+    status = getattr(response, "status", None)
+    incomplete = getattr(response, "incomplete_details", None)
+    incomplete_reason = getattr(incomplete, "reason", None) if incomplete else None
+    return {
+        "response_id": getattr(response, "id", None),
+        "usage": usage,
+        "status": status,
+        "truncated": status == "incomplete",
+        "incomplete_reason": incomplete_reason,
+    }
+
+
 def parse_response(response):
     """把 Responses API 回應解析為
     {"answer", "citations", "evidence", "evidence_mode", "response_id", "usage"}。
@@ -254,27 +274,12 @@ def parse_response(response):
         # citations（來源列）對齊實際顯示的 evidence，不再傾倒全部檔名。
         citations = [e["filename"] for e in evidence]
 
-    usage_obj = getattr(response, "usage", None)
-    usage = {
-        "input_tokens": getattr(usage_obj, "input_tokens", 0) or 0,
-        "output_tokens": getattr(usage_obj, "output_tokens", 0) or 0,
-        "total_tokens": getattr(usage_obj, "total_tokens", 0) or 0,
-    }
-    # status="incomplete" 代表答案被截斷（多為撞 max_output_tokens）；誠實標示供前端提示，
-    # 法遵工具不可讓使用者誤以為看到的是完整回答。incomplete_reason 供 server 端 telemetry。
-    status = getattr(response, "status", None)
-    incomplete = getattr(response, "incomplete_details", None)
-    incomplete_reason = getattr(incomplete, "reason", None) if incomplete else None
     return {
         "answer": answer_text,
         "citations": citations,
         "evidence": evidence,
         "evidence_mode": evidence_mode,
-        "response_id": getattr(response, "id", None),
-        "usage": usage,
-        "status": status,
-        "truncated": status == "incomplete",
-        "incomplete_reason": incomplete_reason,
+        **_response_meta(response),
     }
 
 
@@ -358,6 +363,70 @@ def build_context_block(law, judgment):
     add_section("法規依據", law)
     add_section("判決見解", judgment)
     return "\n\n".join(lines), sources
+
+
+# dual 流引用：模型以 [來源N] 引用我們注入的來源，N 對應 build_context_block 的序號（1-based）。
+_SOURCE_MARKER_RE = re.compile(r"\[來源(\d+)\]")
+
+
+def _linkify_source_markers(text, n_sources):
+    """把 [來源N] 轉成腳註 [^k]，回 (新文字, 依首次引用序的 0-based source index 清單)。
+
+    N 超出 1..n_sources 範圍者安全丟棄（不產生錯誤腳註）。腳註編號依閱讀順序。
+    """
+    order = []
+    num = {}
+
+    def repl(m):
+        k = int(m.group(1))
+        if not (1 <= k <= n_sources):
+            return ""
+        idx = k - 1
+        if idx not in num:
+            order.append(idx)
+            num[idx] = len(order)
+        return f"[^{num[idx]}]"
+
+    return _SOURCE_MARKER_RE.sub(repl, text), order
+
+
+def parse_dual_response(response, sources):
+    """dual 流的解析：citations/evidence 來自 sources（確定性），非解析 model 檢索結果。
+
+    與 parse_response 同輸出契約。模型有標 [來源N] → dual_cited（evidence 為被引用子集）；
+    未標 → dual_retrieved（顯示全部檢索段，去重）。
+    """
+    answer_parts = []
+    for item in response.output:
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in item.content or []:
+            text = getattr(content, "text", None)
+            if text:
+                answer_parts.append(text)
+    joined = "".join(answer_parts)
+    # _linkify_source_markers 同時把有效 [來源N] → [^k]、無效/越界 [來源N] → ""；
+    # 兩路都用 linked，確保不殘留任何 [來源N] 標記（包含越界情形）。
+    linked, cited_idx = _linkify_source_markers(joined, len(sources))
+
+    if cited_idx:
+        answer_text = linked
+        evidence = [dict(sources[i]) for i in cited_idx]
+        citations = [sources[i]["filename"] for i in cited_idx]
+        evidence_mode = "dual_cited"
+    else:
+        answer_text = _strip_citation_markers(linked)
+        evidence = _dedupe_evidence([dict(s) for s in sources])
+        citations = [e["filename"] for e in evidence]
+        evidence_mode = "dual_retrieved"
+
+    return {
+        "answer": answer_text,
+        "citations": citations,
+        "evidence": evidence,
+        "evidence_mode": evidence_mode,
+        **_response_meta(response),
+    }
 
 
 def answer_question(client, question, *, vector_store_id, model, previous_response_id=None):
