@@ -30,23 +30,38 @@ class _FakeResponses:
         self.calls.append(kwargs)
         return self._response
 
+class _FakeVS:
+    def __init__(self):
+        self.search_calls = []
+
+    def search(self, **kwargs):
+        self.search_calls.append(kwargs)
+        is_judgment = (kwargs.get("filters") or {}).get("type") == "eq"
+        dt = "判決" if is_judgment else "法條"
+        fn = "臺北地院-判決-案.txt" if is_judgment else "勞動基準法-第24條.txt"
+        data = [SimpleNamespace(filename=fn, score=0.6, attributes={"doc_type": dt},
+                                content=[SimpleNamespace(type="text", text=f"{dt}內容")])]
+        return SimpleNamespace(data=data)
+
+
 class _FakeClient:
     def __init__(self, response):
         self.responses = _FakeResponses(response)
+        self.vector_stores = _FakeVS()
 
-def test_answer_question_calls_file_search_with_vector_store():
+
+def test_answer_question_uses_dual_retrieval_no_file_search_tool():
     client = _FakeClient(_fake_response())
     result = answer_question(client, "加班費怎麼算?", vector_store_id="vs_123", model="gpt-4o-mini")
-    assert result["answer"] == "加班費依第24條計算。"
-    assert result["citations"] == ["勞動基準法-第24條.txt"]
+    assert len(client.vector_stores.search_calls) == 2
+    assert client.vector_stores.search_calls[0]["filters"] == {"type": "ne", "key": "doc_type", "value": "判決"}
+    assert client.vector_stores.search_calls[1]["filters"] == {"type": "eq", "key": "doc_type", "value": "判決"}
     call = client.responses.calls[0]
     assert call["model"] == "gpt-4o-mini"
-    assert call["input"] == "加班費怎麼算?"
-    assert call["tools"] == [{
-        "type": "file_search",
-        "vector_store_ids": ["vs_123"],
-        "ranking_options": {"score_threshold": 0.5},
-    }]
+    assert "tools" not in call
+    assert "加班費怎麼算?" in call["input"]
+    assert "檢索到的依據" in call["input"]
+    assert result["evidence_mode"] in ("dual_cited", "dual_retrieved")
 
 def _fake_response_with_results():
     annotation = SimpleNamespace(filename="個資法-第12條.txt")
@@ -92,11 +107,6 @@ def test_parse_response_citations_fallback_to_evidence():
     result = parse_response(SimpleNamespace(output=[fs_call, message]))
     assert result["citations"] == ["個資法-第12條.txt", "個資法-第6條.txt"]
 
-def test_answer_question_includes_search_results():
-    client = _FakeClient(_fake_response_with_results())
-    answer_question(client, "個資外洩?", vector_store_id="vs_1", model="gpt-4o-mini")
-    assert client.responses.calls[0]["include"] == ["file_search_call.results"]
-
 def test_answer_question_chains_previous_response_id():
     client = _FakeClient(_fake_response_with_results())
     answer_question(client, "追問", vector_store_id="vs_1", model="gpt-4o-mini", previous_response_id="resp_abc")
@@ -131,7 +141,7 @@ def test_suggest_followups_returns_questions():
 
 
 # ---- (B) answer_question 套用 gpt-5.4-mini 推理模型參數 + markdown 指示 ----
-from app.rag import ANSWER_INSTRUCTIONS, _MODEL_PARAMS
+from app.rag import ANSWER_INSTRUCTIONS, CITATION_PROTOCOL, _MODEL_PARAMS
 
 
 def test_answer_question_applies_reasoning_model_params():
@@ -141,7 +151,7 @@ def test_answer_question_applies_reasoning_model_params():
     assert call["reasoning"] == {"effort": "low"}
     assert call["text"]["verbosity"] == "medium"
     assert call["max_output_tokens"] == 4096  # 推理模型需更多輸出預算，避免 incomplete 截斷
-    assert call["instructions"] == ANSWER_INSTRUCTIONS
+    assert call["instructions"] == ANSWER_INSTRUCTIONS + CITATION_PROTOCOL
     # 推理模型不可帶 temperature/top_p
     assert "temperature" not in call
     assert "top_p" not in call

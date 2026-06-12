@@ -54,6 +54,13 @@ ANSWER_INSTRUCTIONS = (
     "結尾固定附：本回答為研究輔助，非正式法律意見。"
 )
 
+# dual 流的引用規約（附加在 instructions 後）：模型讀注入的 [來源N] 並回標 [來源N]。
+CITATION_PROTOCOL = (
+    "\n\n【引用方式】下方 input 會附「# 檢索到的依據」，內含【法規依據】與【判決見解】"
+    "兩區、各段以 [來源N] 標號。作答時，請在每個論點對應的句末標註其依據的 [來源N]"
+    "（可多個，如 [來源1][來源3]）。只依這些來源作答；若來源不足以回答，明確聲明語料未涵蓋，不得杜撰。"
+)
+
 # gpt-5.4-mini 為推理模型：用 reasoning/text.verbosity，不可傳 temperature/top_p。
 # max_output_tokens 同時涵蓋「可見輸出 + 推理 token」（OpenAI Responses API 定義）；
 # 推理模型若預算太小，會在答案中途以 status="incomplete" 截斷，故給足輸出預算。
@@ -430,14 +437,16 @@ def parse_dual_response(response, sources):
 
 
 def answer_question(client, question, *, vector_store_id, model, previous_response_id=None):
-    """以 file_search tool 對 vector store 提問，回傳 parse_response 的結果。
+    """雙路檢索 → 自組 context → Responses API（不帶 file_search tool）→ parse_dual_response。
 
-    回傳 {"answer", "citations", "evidence", "response_id", "usage"}。傳入 previous_response_id
-    可串接多輪對話（Responses API 的對話狀態）。
+    回傳 {"answer","citations","evidence","evidence_mode","response_id","usage",...}。
+    previous_response_id 可串接多輪對話。
     """
-    kwargs = _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
+    routes = retrieve_dual(client, question, vector_store_id=vector_store_id)
+    context, sources = build_context_block(routes["law"], routes["judgment"])
+    kwargs = _build_dual_kwargs(question, context, model, previous_response_id)
     response = client.responses.create(**kwargs)
-    return parse_response(response)
+    return parse_dual_response(response, sources)
 
 
 def _build_answer_kwargs(question, vector_store_id, model, previous_response_id):
@@ -452,6 +461,20 @@ def _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
             "ranking_options": FILE_SEARCH_RANKING_OPTIONS,
         }],
         "include": ["file_search_call.results"],
+        **_MODEL_PARAMS,
+    }
+    if previous_response_id:
+        kwargs["previous_response_id"] = previous_response_id
+    return kwargs
+
+
+def _build_dual_kwargs(question, context, model, previous_response_id):
+    """組 dual 流的 responses.create kwargs：context 注入 input、不帶 file_search tool。"""
+    user_input = question if not context else f"{question}\n\n# 檢索到的依據\n{context}"
+    kwargs = {
+        "model": model,
+        "input": user_input,
+        "instructions": ANSWER_INSTRUCTIONS + CITATION_PROTOCOL,
         **_MODEL_PARAMS,
     }
     if previous_response_id:
