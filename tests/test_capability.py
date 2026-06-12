@@ -50,3 +50,29 @@ def test_build_manifest_counts_by_doc_type_and_category():
     assert set(m["categories"]) == {"個資", "勞動"}
     assert m["cutoff"] == "2026-05"
     assert m["total"] == 5
+
+
+from app.capability import capability_answer, load_manifest
+
+_MANIFEST = {
+    "doc_type_counts": {"法條": 1163, "施行細則": 197, "函釋": 666, "FAQ": 169, "判決": 106},
+    "categories": ["個資", "勞動", "公司治理", "公平交易", "營業秘密", "消費者保護", "洗錢防制"],
+    "cutoff": "2026-06", "total": 2301,
+}
+
+
+def test_capability_answer_is_data_driven_and_structured():
+    ans = capability_answer(_MANIFEST)
+    assert "我能" in ans
+    assert "1,163" in ans
+    assert "判決" in ans
+    assert "個資" in ans and "洗錢防制" in ans
+    assert "不能" in ans
+    assert "非正式法律意見" in ans
+
+
+def test_capability_answer_no_hallucinated_numbers():
+    m = dict(_MANIFEST, doc_type_counts={"法條": 5})
+    ans = capability_answer(m)
+    assert "5" in ans
+    assert "1,163" not in ans
