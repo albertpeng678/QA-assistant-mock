@@ -24,8 +24,8 @@ async function askFirstStarter(page: Page) {
   // 串流「真正完成」的訊號：來源列（.src-row）只在 finalizeAnswer 渲染。
   // 不可只等上標引用——串流途中 markdown 即時渲染就會出現上標，但 final 會以
   // innerHTML 重渲染整段、置換這些節點，若此時點擊會點到已脫離的舊節點。
-  await expect(page.locator(".src-row")).toHaveCount(3);
-  await expect(page.locator("[data-answer] sup a.cite-ref")).toHaveCount(3);
+  await expect(page.locator(".src-row")).toHaveCount(4);
+  await expect(page.locator("[data-answer] sup a.cite-ref")).toHaveCount(4);
   await expect(answer).toContainText("通知當事人");
 }
 
@@ -37,14 +37,14 @@ test.describe("法遵 RAG 問答 E2E", () => {
     const answerText = await page.locator("[data-answer]").innerText();
     expect(answerText.trim().length).toBeGreaterThan(0);
 
-    // 三則來源列
-    await expect(page.locator(".src-row")).toHaveCount(3);
+    // 四則來源列（含判決）
+    await expect(page.locator(".src-row")).toHaveCount(4);
     await expect(
       page.locator('.src-row[data-filename="個人資料保護法-第12條.txt"]')
     ).toBeVisible();
 
-    // 答案內腳註渲染成上標引用
-    await expect(page.locator("[data-answer] sup a.cite-ref")).toHaveCount(3);
+    // 答案內腳註渲染成上標引用（含判決 [^4]）
+    await expect(page.locator("[data-answer] sup a.cite-ref")).toHaveCount(4);
   });
 
   test("上標引用開 offcanvas 並高亮", async ({ page }) => {
@@ -159,6 +159,37 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(page.locator(".src-row")).toHaveCount(1);
   });
 
+  test("判決見解證據卡顯示（無 url 走優雅降級顯示 snippet）", async ({ page }) => {
+    await test.step("問答完成，等待串流 final", async () => {
+      await askFirstStarter(page);
+    });
+
+    await test.step("點第 4 個腳註引用（判決）開 offcanvas", async () => {
+      await page.locator('[data-answer] .cite-ref[data-ref="4"]').click();
+      await expect(page.locator("#offcanvas")).toHaveClass(/open/);
+    });
+
+    await test.step("判決見解卡顯示 snippet 文字", async () => {
+      // 在 offcanvas 的 #oc-body 內定位 .evi-card，排除 src-row
+      const judgmentCard = page
+        .locator("#oc-body .evi-card")
+        .filter({ hasText: "臺北地院-判決-個資外洩損害賠償案.txt" });
+      await expect(judgmentCard).toBeVisible();
+      // snippet 含「通知義務」（來自 evidence text）
+      await expect(judgmentCard).toContainText("通知義務");
+    });
+
+    await test.step("無 url → 不渲染外連 a.open-link（優雅降級）", async () => {
+      const judgmentCard = page
+        .locator("#oc-body .evi-card")
+        .filter({ hasText: "臺北地院-判決-個資外洩損害賠償案.txt" });
+      // 判決無 url，不得有外連連結
+      await expect(judgmentCard.locator("a.open-link")).toHaveCount(0);
+      // 改為展開全文按鈕
+      await expect(judgmentCard.locator("button.open-full")).toBeVisible();
+    });
+  });
+
   test("跨裝置（手機）問答流程 @mobile", async ({ page }) => {
     // chromium-mobile project 已用 Pixel 5；此處再明確設一個窄 viewport 作雙保險。
     await page.setViewportSize({ width: 390, height: 780 });
@@ -166,7 +197,7 @@ test.describe("法遵 RAG 問答 E2E", () => {
 
     // 答案與來源在窄螢幕仍顯示
     await expect(page.locator("[data-answer]")).toContainText("通知當事人");
-    await expect(page.locator(".src-row")).toHaveCount(3);
+    await expect(page.locator(".src-row")).toHaveCount(4);
 
     // offcanvas 在手機仍能開（寬度 84%/86vw 不細驗）
     await page.locator('[data-answer] .cite-ref[data-ref="1"]').click();
