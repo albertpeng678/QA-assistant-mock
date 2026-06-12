@@ -50,6 +50,16 @@ class _FakeClient:
         self.vector_stores = _FakeVS()
 
 
+def test_build_dual_kwargs_empty_context_omits_citation_protocol():
+    from app.rag import _build_dual_kwargs, ANSWER_INSTRUCTIONS, CITATION_PROTOCOL
+    empty = _build_dual_kwargs("問題", "", "m", None)
+    assert empty["input"] == "問題"
+    assert empty["instructions"] == ANSWER_INSTRUCTIONS          # 無引用規約
+    full = _build_dual_kwargs("問題", "## 法規依據\n[來源1]內容", "m", None)
+    assert "檢索到的依據" in full["input"]
+    assert full["instructions"] == ANSWER_INSTRUCTIONS + CITATION_PROTOCOL
+
+
 def test_answer_question_uses_dual_retrieval_no_file_search_tool():
     client = _FakeClient(_fake_response())
     result = answer_question(client, "加班費怎麼算?", vector_store_id="vs_123", model="gpt-4o-mini")
@@ -62,6 +72,7 @@ def test_answer_question_uses_dual_retrieval_no_file_search_tool():
     assert "加班費怎麼算?" in call["input"]
     assert "檢索到的依據" in call["input"]
     assert result["evidence_mode"] in ("dual_cited", "dual_retrieved")
+    assert result["answer"] == "加班費依第24條計算。"
 
 def _fake_response_with_results():
     annotation = SimpleNamespace(filename="個資法-第12條.txt")

@@ -469,12 +469,21 @@ def _build_answer_kwargs(question, vector_store_id, model, previous_response_id)
 
 
 def _build_dual_kwargs(question, context, model, previous_response_id):
-    """組 dual 流的 responses.create kwargs：context 注入 input、不帶 file_search tool。"""
-    user_input = question if not context else f"{question}\n\n# 檢索到的依據\n{context}"
+    """組 dual 流的 responses.create kwargs：context 注入 input、不帶 file_search tool。
+
+    兩路皆無檢索結果（context 空）時：不注入來源，也不附引用規約——避免要求模型
+    引用不存在的 [來源N]（模型仍會依 ANSWER_INSTRUCTIONS 聲明語料未涵蓋）。
+    """
+    if context:
+        user_input = f"{question}\n\n# 檢索到的依據\n{context}"
+        instructions = ANSWER_INSTRUCTIONS + CITATION_PROTOCOL
+    else:
+        user_input = question
+        instructions = ANSWER_INSTRUCTIONS
     kwargs = {
         "model": model,
         "input": user_input,
-        "instructions": ANSWER_INSTRUCTIONS + CITATION_PROTOCOL,
+        "instructions": instructions,
         **_MODEL_PARAMS,
     }
     if previous_response_id:
