@@ -445,3 +445,15 @@ test("展開原文：短來源（有 url 的法條）於 offcanvas inline 展開
   await card.getByRole("button", { name: "展開原文" }).click();
   await expect(card.locator(".full-text")).toBeHidden();
 });
+
+test("釘頂引用段落保留段落結構（pre-wrap，不被壓成一行純文字）", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("輸入法遵問題").fill("個資外洩通報");
+  await page.getByLabel("送出").click();
+  await expect(page.locator("[data-answer]")).toBeVisible();
+  await page.getByRole("button", { name: /展開引證：臺北地院-判決/ }).click();
+  await page.locator(".evi-card", { hasText: "臺北地院-判決" }).locator("button.open-full").click();
+  await expect(page.locator("#reading-view")).toHaveClass(/open/);
+  const ws = await page.locator("#reading-view .rv-pin p").evaluate(el => getComputedStyle(el).whiteSpace);
+  expect(ws).toMatch(/pre-wrap|pre-line/);
+});
