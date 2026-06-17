@@ -90,6 +90,9 @@
      底部淡出，全文靠「展開原文全文」——否則卡片形同預設攤開全文。 */
   .evi-snippet{ display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:8;
                 overflow:hidden; position:relative; }
+  /* 被引片段高亮盒（teal）：卡片即呈現「答案引用段落」 */
+  .evi-cite{ background:oklch(0.665 0.105 200 / 0.12); border:1px solid oklch(0.665 0.105 200 / 0.40); border-radius:8px; padding:8px 10px; }
+  .evi-cite-tag{ display:inline-flex; align-items:center; gap:4px; font-family:'Hanken Grotesk',sans-serif; font-size:10px; font-weight:700; color:var(--brand-accent); margin-bottom:2px; }
 
   /* —— 缺口⑦：確定性層級標籤（填色 chip：墨／teal／amber／灰，2 低飽和輔色經使用者核可）—— */
   .tier{ display:inline-block; font-family:'Spline Sans'; font-size:.74em; font-weight:700;
@@ -687,7 +690,8 @@ function renderEvidence(activeFilename){
           <span class="text-[var(--blood)] flex-1 truncate">${escapeHtml(e.filename||"")}</span>
           <span class="text-[10px] text-[var(--ink-50)] font-normal">${score}</span>
         </div>
-        <div class="legal-pre evi-snippet font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2">${escapeHtml(e.text||"")}</div>
+        <div class="evi-cite mt-2"><span class="evi-cite-tag"><i data-lucide="quote" class="icon-xs"></i> 答案引用段落</span>
+          <div class="legal-pre evi-snippet font-body text-[13px] leading-relaxed mt-1">${escapeHtml(e.text||"")}</div></div>
         ${action}
       </div>`;
   }).join("");

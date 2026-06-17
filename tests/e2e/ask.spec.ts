@@ -334,3 +334,12 @@ test("判決閱讀檢視：釘頂被引段落、顯示全文、命中高亮 @mob
   await expect(rv.locator(".rv-full")).toContainText("臺灣臺北地方法院民事判決");
   await expect(rv.locator(".rv-full mark.rv-hit")).toHaveCount(1);
 });
+
+test("引證卡：被引片段以『答案引用段落』高亮呈現", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("輸入法遵問題").fill("個資外洩通報");
+  await page.getByLabel("送出").click();
+  await expect(page.locator("[data-answer]")).toBeVisible();
+  await page.getByRole("button", { name: /展開引證/ }).first().click();
+  await expect(page.locator(".evi-card .evi-cite-tag").first()).toContainText("答案引用");
+});
