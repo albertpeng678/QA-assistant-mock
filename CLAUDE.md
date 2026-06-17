@@ -16,8 +16,9 @@
 > 6 個起始缺口**已全部補完**並上線（production：`https://corp-law-qa-assistant.up.railway.app`）。
 > 其後依序完成：七項需求修正＋語料擴充（spec `2026-06-09-legal-rag-7fixes-design.md`）→
 > 答案清晰化＋資訊架構（spec `2026-06-12-answer-clarity-ia-design.md`）→
-> 24 月判決全量上傳 → 召回/多輪/等待UX/manifest 四修正 → 判決全文功能 → **範疇防護 guardrail**。
-> 測試基線：**pytest 155 綠、e2e 22 綠**（`tests/e2e/ask.spec.ts` 對 mock:8001）。
+> 24 月判決全量上傳 → 召回/多輪/等待UX/manifest 四修正 → 判決全文功能 → **範疇防護 guardrail**
+> → **Airy Glass 設計系統套用**（`design-system.md`）→ **判決長文閱讀檢視**（spec `2026-06-17-judgment-reading-view-design.md`）。
+> 測試基線：**pytest 155 綠、e2e 29 綠**（`tests/e2e/ask.spec.ts` 對 mock:8001）。
 
 ### 問答管線（`app/rag.py`）
 - `answer_question`(同步) / `astream_answer`(async，SSE 用) → `parse_dual_response` 回 `{answer, citations, evidence, evidence_mode, response_id, usage, tier}`。
@@ -34,10 +35,11 @@
 - **階段事件**：`{"type":"stage","stage":"retrieving"|"retrieved"(含 law_count/judgment_count 實數)|"generating"}`，meta/oos 輪零 stage。前端：階段步驟列（打勾+實數+脈動）+ 答案形骨架 → 首 token 收合；>12s 顯安撫文案+**停止鍵**（AbortController，中止後中性訊息）。NN/g：>10s 等待要顯真實步驟、非 spinner。
 
 ### 前端（`static/index.html`，單欄、無 @media、Tailwind CDN）
-- 設計 token：`--ink #1a1714`/`--paper #f5f2ea`/`--blood #7a2e2e`；Fraunces/Spectral/Public Sans。
-- Layer-0 tier badge 來自 `evt.tier`（明文=**朱紅 --blood**、解釋裁量=teal、實務見解=amber、未涵蓋=灰）。
+- 設計系統：**Airy Glass**（`design-system.md`）。變數名沿用（`--ink`/`--paper`/`--blood`）但值已改 oklch：`--blood`=**navy 主色**、`--paper`=暖白、`--brand-accent`=品牌 teal；標題 Hanken Grotesk、內文 Spline Sans；appbar 淺色毛玻璃 + 底色氛圍漸層。**只引用 token、不寫死色票、禁 emoji**。
+- Layer-0 tier badge 來自 `evt.tier`（明文=**navy --blood**、解釋裁量=teal、實務見解=**靛藍灰** `oklch(0.52 0.06 250)`、未涵蓋=灰）。
 - 表格包 `overflow-x-auto`（窄螢幕橫捲不爆版）；caveat 為淡底軟盒（**不可用左槓鑲邊**，使用者明確否決）。
-- offcanvas 證據卡：摘要夾制 8 行（`.evi-snippet` line-clamp；同檔合併後 snippet 達數千字，不夾形同攤開）；「展開原文全文」優先以 `data-file-id` 打 `/api/source_vs/{file_id}`（**判決原文不在 production 檔案系統**，自 vector store `files.content` 取回）→ 退 `/api/source`（本地法條）→ 雙敗友善降級；toggle 有快取。
+- offcanvas 證據卡：片段以「**答案引用段落**」teal 高亮盒呈現 `evidence.text`（`.evi-cite`，內 `.evi-snippet` 夾制 8 行）；「展開原文全文」打 `/api/source_vs/{file_id}`（判決，自 vector store `files.content`）→ 退 `/api/source`（本地法條）→ 友善降級。**長度觸發**（`READING_VIEW_THRESHOLD=600`）：取回全文 ≥600 字（判決）→ 開**判決閱讀檢視**；短文維持抽屜內 inline。
+- **判決閱讀檢視（`#reading-view`）**：釘頂被引段落（`evidence.text`，一定有）+ 判決全文（`white-space:pre-wrap` 保留換行、寬閱讀欄 ~640px）+ `findCitedRange` **最長前綴模糊比對**高亮（命中標「自動定位」；merge/非連續 chunk 標可匹配前綴；未命中只釘頂、不誤標）+ 回頂部 + 官方原文（有 `url` 才顯）。**一次只一個側欄**：開閱讀檢視自動 `closeOffcanvas()`、返回鍵 `rvBackToList()` 重開清單（NN/g：避免競爭式 overlay；spec/plan `2026-06-17-judgment-reading-view`）。桌機右側寬面板、手機 `<640px` 全螢幕。
 - 延續輪（`ui.isFollowup`）抑制「超出涵蓋範圍」缺口橫幅；空狀態注入有競態 guard（對話已開始不注入）。
 
 ### 語料與 vector store
