@@ -377,3 +377,19 @@ test("回溯高亮：被引段落不在全文時，仍釘頂片段且不誤標�
   expect(r.hits).toBe(0);
   expect(r.fullShown).toBe(true);
 });
+
+test("一次一個側欄：開閱讀檢視關引證抽屜、返回鍵重開清單 @mobile", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("輸入法遵問題").fill("個資外洩通報");
+  await page.getByLabel("送出").click();
+  await expect(page.locator("[data-answer]")).toBeVisible();
+  await page.getByRole("button", { name: /展開引證：臺北地院-判決/ }).click();
+  await expect(page.locator("#offcanvas")).toHaveClass(/open/);
+  await page.getByRole("button", { name: /閱讀判決全文|展開原文全文/ }).first().click();
+  const rv = page.locator("#reading-view");
+  await expect(rv).toHaveClass(/open/);
+  await expect(page.locator("#offcanvas")).not.toHaveClass(/open/);   // 開閱讀檢視 → 引證抽屜自動關
+  await page.getByRole("button", { name: "返回引證清單" }).click();
+  await expect(rv).not.toHaveClass(/open/);
+  await expect(page.locator("#offcanvas")).toHaveClass(/open/);        // 返回 → 重開引證清單
+});

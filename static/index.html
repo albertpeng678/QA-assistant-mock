@@ -258,7 +258,7 @@
   <div id="rv-scrim"></div>
   <aside id="reading-view" role="dialog" aria-modal="true" aria-label="判決閱讀檢視">
     <div class="rv-bar">
-      <button id="rv-close" aria-label="關閉" class="bar-btn inline-flex items-center justify-center w-8 h-8 rounded-lg" style="border:1px solid var(--border)"><i data-lucide="chevron-left" class="icon-sm"></i></button>
+      <button id="rv-close" aria-label="返回引證清單" class="bar-btn inline-flex items-center justify-center w-8 h-8 rounded-lg" style="border:1px solid var(--border)"><i data-lucide="chevron-left" class="icon-sm"></i></button>
       <div class="rv-tt"><div class="t" id="rv-title"></div><div class="m" id="rv-meta"></div></div>
       <a id="rv-ext" class="rv-ext hidden" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="icon-xs"></i> 官方原文</a>
     </div>
@@ -787,7 +787,7 @@ function renderReadingView(ev, fullText){
   const jump = document.getElementById("rv-jump");
   if(jump) jump.addEventListener("click", ()=> document.getElementById("rv-hit")?.scrollIntoView({ block:"center", behavior:"smooth" }));
 }
-function openReadingView(ev, fullText){ renderReadingView(ev, fullText); rvScrim.classList.add("open"); readingView.classList.add("open"); }
+function openReadingView(ev, fullText){ closeOffcanvas(); renderReadingView(ev, fullText); rvScrim.classList.add("open"); readingView.classList.add("open"); }
 
 /* —— 判決閱讀檢視控制 —— */
 const READING_VIEW_THRESHOLD = 600;
@@ -795,7 +795,9 @@ const rvScrim = document.getElementById("rv-scrim");
 const readingView = document.getElementById("reading-view");
 const rvBody = document.getElementById("rv-body");
 function closeReadingView(){ rvScrim.classList.remove("open"); readingView.classList.remove("open"); }
-document.getElementById("rv-close").addEventListener("click", closeReadingView);
+/* 返回鍵：關閉閱讀檢視並重開引證清單（一次只一個側欄）；scrim/Esc 僅關閉、回到對話 */
+function rvBackToList(){ closeReadingView(); openOffcanvas(); }
+document.getElementById("rv-close").addEventListener("click", rvBackToList);
 rvScrim.addEventListener("click", closeReadingView);
 document.addEventListener("keydown", e=>{ if(e.key==="Escape" && readingView.classList.contains("open")) closeReadingView(); });
 const rvB2t = document.getElementById("rv-b2t");
