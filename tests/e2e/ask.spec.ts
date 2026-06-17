@@ -406,6 +406,10 @@ test("cleanLegalText：去 PDF 斷行/全形空白、硬斷續行接回、結構
       wrappedJoined: c.includes("訴訟費用之裁判均廢棄"),   // 硬斷續行接回同段
       headStandalone: /(^|\n\n)主文(\n\n|$)/.test(c),      // 主文去字間空白、自成段
       itemNewPara: c.includes("\n\n一、原判決關於"),        // 編號項起新段
+      // 治本關鍵：法條各「項」以句號結尾→各自成段，不被黏死（通用句末規則，非關鍵字）
+      lawItemsSplit: cleanLegalText("公務機關應置保護長，由首長指派兼任。\n公務機關應指定專人辦理安全維護事項。\n公務機關不得予以不利處分。").split("\n\n").length,
+      // 通用性：未列舉的「主旨：…。說明：…」靠句末規則自動分段（非靠關鍵字）
+      hanReleaseSplit: cleanLegalText("主旨：應落實洗錢防制措施，請查照。\n說明：請依規定辦理。").split("\n\n").length,
     };
   });
   expect(r.noCR).toBe(true);
@@ -414,6 +418,8 @@ test("cleanLegalText：去 PDF 斷行/全形空白、硬斷續行接回、結構
   expect(r.wrappedJoined).toBe(true);
   expect(r.headStandalone).toBe(true);
   expect(r.itemNewPara).toBe(true);
+  expect(r.lawItemsSplit).toBe(3);     // 三項 → 三段
+  expect(r.hanReleaseSplit).toBe(2);   // 主旨/說明 → 兩段（無需關鍵字）
 });
 
 test("展開原文：短來源（有 url 的法條）於 offcanvas inline 展開、不開閱讀檢視、結構乾淨", async ({ page }) => {

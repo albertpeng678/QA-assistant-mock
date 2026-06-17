@@ -760,21 +760,27 @@ function findCitedRange(fullText, excerpt){
   return { start, end };
 }
 
-/* 司法院判決原文（PDF→text）清理：去 \r、收斂全形/連續空白、把硬斷續行接回流動段落、
-   結構標記（主文／一、二、…）自成段；回傳以空行分段的乾淨字串。 */
+/* 司法院/法規 PDF→text 清理（doc_type/領域/法院無關，純通用結構訊號；非關鍵字列舉）。
+   依社群主流 text-unwrap 啟發法 + 對本語料 5 種 doc_type 實測校準：
+   - 行尾為終止標點（。！？：；）→ 真實段界，收段（法條每「項」、判決每句群各自成段）
+   - 行首為通用編號（第X條/一、/（一）/1./㈠）→ 起新段（編號項目分段）
+   - 短置中行（原行有前導縮排、≤8 字、無終止標點）→ 標題自成段（主文/主旨…，免列舉）
+   - 空行 → 段界；其餘 → PDF 硬斷續行，接回上一行（CJK 不補空格）
+   回傳以空行分段的乾淨字串。 */
 function cleanLegalText(raw){
   if(!raw) return "";
-  const isHead = s => /^(主文|事實及理由|事實|理由|爭點|附表|附註|中華民國|來源[:：])/.test(s)
-    || /^[一二三四五六七八九十]+、/.test(s)
-    || /^[（(][一二三四五六七八九十\d]+[)）]/.test(s)
-    || /^\d+[、.．]/.test(s);
+  const ENUM = /^(第[一二三四五六七八九十百零\d]+[條項款目]|[一二三四五六七八九十]+、|[（(][一二三四五六七八九十\d]+[)）]|\d+[、.．]|[㈠-㈩①-⑳⒈-⒛])/;
+  const END = /[。！？：；]$/;
   const out = []; let buf = "";
   const flush = () => { const b = buf.trim(); if(b) out.push(b); buf = ""; };
-  for(const line of raw.replace(/\r/g,"").split("\n")){
-    const l = line.replace(/　/g," ").replace(/[ \t]+/g," ").trim();
+  for(const rawLine of raw.replace(/\r/g,"").split("\n")){
+    const indented = /^[ \t　]/.test(rawLine);
+    const l = rawLine.replace(/　/g," ").replace(/[ \t]+/g," ").trim();
     if(!l){ flush(); continue; }
-    if(isHead(l.replace(/\s/g,""))){ flush(); buf = l.replace(/\s/g,""); }  // 結構行去字間空白、起新段
-    else { buf += l; }                                                       // 續行接回（CJK 不補空格）
+    const heading = indented && l.replace(/\s/g,"").length <= 8 && !END.test(l) && !ENUM.test(l);
+    if(ENUM.test(l) || heading) flush();              // 起新段
+    buf += heading ? l.replace(/\s/g,"") : l;          // 標題去字間空白；其餘 CJK 不補空格
+    if(END.test(l) || heading) flush();               // 句末收段／標題自成段
   }
   flush();
   return out.join("\n\n");
