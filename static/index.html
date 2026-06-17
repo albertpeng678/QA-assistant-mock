@@ -251,6 +251,19 @@
     <div id="oc-body" class="flex-1 overflow-y-auto px-4 py-4 space-y-3"></div>
   </aside>
 
+  <!-- 判決閱讀檢視（長文用） -->
+  <div id="rv-scrim"></div>
+  <aside id="reading-view" role="dialog" aria-modal="true" aria-label="判決閱讀檢視">
+    <div class="rv-bar">
+      <button id="rv-close" aria-label="關閉" class="bar-btn inline-flex items-center justify-center w-8 h-8 rounded-lg" style="border:1px solid var(--border)"><i data-lucide="chevron-left" class="icon-sm"></i></button>
+      <div class="rv-tt"><div class="t" id="rv-title"></div><div class="m" id="rv-meta"></div></div>
+      <a id="rv-ext" class="rv-ext hidden" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="icon-xs"></i> 官方原文</a>
+    </div>
+    <div class="rv-body" id="rv-body"></div>
+    <button id="rv-b2t" class="rv-b2t" aria-label="回頂部"><i data-lucide="arrow-up" class="icon-sm"></i></button>
+    <div class="rv-foot"><i data-lucide="alert-triangle" class="icon-xs"></i> 全文取自判決書，AI 摘要僅供研究參考，請對照原文核對。</div>
+  </aside>
+
 <script>
 const STARTERS = [
   "個資外洩要通報誰？期限多久？",
@@ -719,6 +732,19 @@ document.getElementById("ham").addEventListener("click", ()=>
 document.getElementById("oc-close").addEventListener("click", closeOffcanvas);
 scrim.addEventListener("click", closeOffcanvas);
 document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeOffcanvas(); });
+
+/* —— 判決閱讀檢視控制 —— */
+const READING_VIEW_THRESHOLD = 600;
+const rvScrim = document.getElementById("rv-scrim");
+const readingView = document.getElementById("reading-view");
+const rvBody = document.getElementById("rv-body");
+function closeReadingView(){ rvScrim.classList.remove("open"); readingView.classList.remove("open"); }
+document.getElementById("rv-close").addEventListener("click", closeReadingView);
+rvScrim.addEventListener("click", closeReadingView);
+document.addEventListener("keydown", e=>{ if(e.key==="Escape" && readingView.classList.contains("open")) closeReadingView(); });
+const rvB2t = document.getElementById("rv-b2t");
+rvBody.addEventListener("scroll", ()=> rvB2t.classList.toggle("show", rvBody.scrollTop > rvBody.clientHeight*2));
+rvB2t.addEventListener("click", ()=> rvBody.scrollTo({ top:0, behavior:"smooth" }));
 
 // 點答案內的上標引用 → 開 offcanvas，高亮對應來源（依序號對到 evidence）
 thread.addEventListener("click", e=>{

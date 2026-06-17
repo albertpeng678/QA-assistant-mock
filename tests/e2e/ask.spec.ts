@@ -315,3 +315,10 @@ test.describe("法遵 RAG 問答 E2E", () => {
     await expect(page.getByText("本題超出語料直接涵蓋範圍")).toHaveCount(0);
   });
 });
+
+test("判決閱讀檢視：容器存在且預設關閉", async ({ page }) => {
+  await page.goto("/");
+  const rv = page.locator("#reading-view");
+  await expect(rv).toHaveCount(1);
+  await expect(rv).not.toHaveClass(/open/);
+});
