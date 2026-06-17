@@ -1,4 +1,17 @@
-from app.db import Base, QueryLog, Feedback, make_session_factory, _normalize_db_url
+from app.db import Base, QueryLog, Feedback, make_session_factory, _normalize_db_url, _engine_kwargs
+
+
+def test_engine_kwargs_postgres_has_pre_ping():
+    # Railway 切斷閒置連線 → 需 pre-ping 驗活 + recycle 汰換，避免 "SSL error: unexpected eof while reading"
+    kw = _engine_kwargs("postgresql+psycopg://user:pw@host:5432/db")
+    assert kw["pool_pre_ping"] is True
+    assert kw["pool_recycle"] == 1800
+
+
+def test_engine_kwargs_sqlite_no_pool_args():
+    kw = _engine_kwargs("sqlite+pysqlite:///:memory:")
+    assert "pool_pre_ping" not in kw
+    assert "pool_recycle" not in kw
 
 
 def test_normalize_db_url():

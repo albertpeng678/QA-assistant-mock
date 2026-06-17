@@ -72,8 +72,24 @@ def _normalize_db_url(url):
     return url
 
 
+def _engine_kwargs(url):
+    """Postgres 連線池健康設定，解 "SSL error: unexpected eof while reading"。
+
+    Railway 會切斷閒置的 Postgres 連線；SQLAlchemy 預設會把已死的連線留在池中
+    並於下次借出時重用 → 觸發 SSL eof / OperationalError。
+    pool_pre_ping 在借出前先 ping（SELECT 1）驗連線存活、失效則自動重連；
+    pool_recycle 主動汰換超過 30 分鐘的老連線（小於 Railway 閒置上限）。
+    （SQLAlchemy 官方亦將 SSL 異常中止列為 pool-invalidating disconnect。）
+    sqlite（測試）不需要，保持原樣。
+    """
+    kwargs = {"future": True}
+    if url.startswith("postgresql"):
+        kwargs.update(pool_pre_ping=True, pool_recycle=1800)
+    return kwargs
+
+
 def make_session_factory(url):
     url = _normalize_db_url(url)
-    engine = create_engine(url, future=True)
+    engine = create_engine(url, **_engine_kwargs(url))
     Base.metadata.create_all(engine)
     return sessionmaker(engine, expire_on_commit=False)
