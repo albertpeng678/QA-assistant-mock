@@ -343,3 +343,37 @@ test("引證卡：被引片段以『答案引用段落』高亮呈現", async ({
   await page.getByRole("button", { name: /展開引證/ }).first().click();
   await expect(page.locator(".evi-card .evi-cite-tag").first()).toContainText("答案引用");
 });
+
+test("回溯高亮：被引段落不在全文時，仍釘頂片段且不誤標（production-realistic 降級）", async ({ page }) => {
+  await page.goto("/");
+  // findCitedRange 純函式：不在全文 → null；整段在全文 → 命中
+  const miss = await page.evaluate(() => findCitedRange("甲乙丙丁戊己庚辛壬癸全文實際內容片段", "完全不存在於全文的引用片段XYZ123"));
+  const hit = await page.evaluate(() => findCitedRange("前段甲乙丙丁戊己庚辛壬癸子丑寅卯後段", "甲乙丙丁戊己庚辛壬癸子丑寅卯"));
+  expect(miss).toBeNull();
+  expect(hit).not.toBeNull();
+  // 部分命中（merged-chunk 真實情況）：長前綴在全文、尾段不在 → 標可匹配的連續前綴，不含尾段雜訊
+  const partial = await page.evaluate(() => {
+    const full = "這是判決理由第一段內容相當完整可供定位之文字，後面還有更多內容。";
+    const r = findCitedRange(full, "判決理由第一段內容相當完整可供定位之文字完全不相干的尾巴ZZZ");
+    return r ? full.slice(r.start, r.end) : null;
+  });
+  expect(partial).not.toBeNull();
+  expect(partial).toContain("判決理由第一段內容");
+  expect(partial).not.toContain("ZZZ");
+  // 未命中時 renderReadingView 仍釘頂片段、全文照顯、但不誤標 mark.rv-hit
+  const r = await page.evaluate(() => {
+    openReadingView({ filename: "某判決.txt", text: "這是一段不存在於全文的被引文字ABC123" },
+      "完全不同的判決全文內容，與被引段落毫無重疊之處，僅供測試降級。".repeat(15));
+    const rv = document.getElementById("reading-view");
+    return {
+      open: rv.classList.contains("open"),
+      pin: document.querySelector("#reading-view .rv-pin p")?.textContent || "",
+      hits: document.querySelectorAll("#reading-view .rv-full mark.rv-hit").length,
+      fullShown: (document.querySelector("#reading-view .rv-full")?.textContent || "").length > 0,
+    };
+  });
+  expect(r.open).toBe(true);
+  expect(r.pin).toContain("不存在於全文");
+  expect(r.hits).toBe(0);
+  expect(r.fullShown).toBe(true);
+});

@@ -743,17 +743,21 @@ function findCitedRange(fullText, excerpt){
   const nf = fullText.replace(/\s+/g, "");
   const ne = excerpt.replace(/\s+/g, "");
   if(!ne) return null;
+  if(ne.length < 12) return null;
   const map = []; for(let i=0;i<fullText.length;i++){ if(!/\s/.test(fullText[i])) map.push(i); }
-  for(const probe of [ne, ne.slice(0,24)]){
-    if(probe.length < 8) continue;
-    const at = nf.indexOf(probe);
-    if(at >= 0){
-      const start = map[at];
-      const end = map[Math.min(at + probe.length, map.length) - 1] + 1;
-      return { start, end };
-    }
+  // 最長可命中前綴（二分）：整段相符標整段；merged/非連續 chunk 標可匹配的連續前綴；
+  // <12 字不採用，避免亂標碎片（依真實 production 判決資料校準）。
+  let lo = 12, hi = ne.length, best = 0;
+  while(lo <= hi){
+    const mid = (lo + hi) >> 1;
+    if(nf.indexOf(ne.slice(0, mid)) >= 0){ best = mid; lo = mid + 1; } else { hi = mid - 1; }
   }
-  return null;
+  if(best < 12) return null;
+  const at = nf.indexOf(ne.slice(0, best));
+  if(at < 0) return null;
+  const start = map[at];
+  const end = map[Math.min(at + best, map.length) - 1] + 1;
+  return { start, end };
 }
 
 /* 渲染閱讀檢視：釘頂片段（evidence.text）+ 全文 + 盡力高亮 */
