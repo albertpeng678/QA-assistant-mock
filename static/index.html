@@ -131,6 +131,39 @@
               transform:translateX(-100%); transition:transform .28s cubic-bezier(.4,0,.2,1); z-index:50;
               display:flex; flex-direction:column; }
   #offcanvas.open{ transform:translateX(0); }
+
+  /* —— 判決閱讀檢視（長文：移出窄抽屜的寬閱讀面）—— */
+  #rv-scrim{ position:fixed; inset:0; background:oklch(0.225 0.018 262 / 0.40); opacity:0; pointer-events:none; transition:opacity .25s; z-index:60; }
+  #rv-scrim.open{ opacity:1; pointer-events:auto; }
+  #reading-view{ position:fixed; top:0; right:0; bottom:0; width:min(760px,94vw); background:var(--surface);
+                 border-left:1px solid var(--ink-12); box-shadow:var(--shadow-lg);
+                 transform:translateX(100%); transition:transform .28s cubic-bezier(.4,0,.2,1); z-index:70;
+                 display:flex; flex-direction:column; }
+  #reading-view.open{ transform:translateX(0); }
+  @media (max-width:640px){ #reading-view{ width:100vw; border-left:none; } }
+  .rv-bar{ display:flex; align-items:center; gap:9px; padding:12px 16px; flex:none;
+           background:var(--glass); border-bottom:1px solid var(--glass-border);
+           -webkit-backdrop-filter:blur(16px) saturate(150%); backdrop-filter:blur(16px) saturate(150%); }
+  .rv-bar .rv-tt{ flex:1; min-width:0; }
+  .rv-bar .rv-tt .t{ font-family:'Hanken Grotesk',sans-serif; font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rv-bar .rv-tt .m{ font-size:11px; color:var(--ink-50); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+  .rv-ext{ display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; color:var(--blood); border:1px solid var(--glass-border); border-radius:8px; padding:5px 9px; background:var(--surface); flex:none; text-decoration:none; }
+  .rv-body{ flex:1; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:16px 18px; }
+  .rv-col{ max-width:640px; margin:0 auto; }
+  .rv-pin{ background:oklch(0.665 0.105 200 / 0.16); border:1px solid oklch(0.665 0.105 200 / 0.45); border-radius:11px; padding:12px 14px; margin-bottom:14px; }
+  .rv-pin .tg{ display:inline-flex; align-items:center; gap:4px; font-family:'Hanken Grotesk',sans-serif; font-size:10.5px; font-weight:700; color:var(--paper); background:var(--brand-accent); border-radius:7px; padding:2px 9px; margin-bottom:7px; }
+  .rv-pin p{ margin:0; font-size:14.5px; line-height:1.85; }
+  .rv-pin .jump{ margin-top:8px; font-size:11px; font-weight:600; color:var(--blood); background:none; border:none; cursor:pointer; padding:0; }
+  .rv-flabel{ display:flex; align-items:center; gap:6px; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-50); text-transform:uppercase; margin:6px 0 8px; }
+  .rv-full{ white-space:pre-wrap; word-break:break-word; font-size:15px; line-height:1.85; color:var(--ink); }
+  .rv-full mark.rv-hit{ background:oklch(0.665 0.105 200 / 0.20); border-bottom:2px solid oklch(0.665 0.105 200 / 0.45); border-radius:3px; padding:1px 0; color:inherit; }
+  .rv-hitnote{ font-size:10px; color:var(--ink-50); font-style:italic; margin-left:4px; }
+  .rv-b2t{ position:absolute; right:16px; bottom:18px; width:36px; height:36px; border-radius:999px; background:var(--blood); color:var(--paper);
+           display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow-lg); cursor:pointer; opacity:0; pointer-events:none; transition:opacity .2s; border:none; }
+  .rv-b2t.show{ opacity:1; pointer-events:auto; }
+  .rv-foot{ flex:none; border-top:1px solid var(--border); background:var(--glass); padding:9px 16px; font-size:11px; color:var(--ink-50); display:flex; align-items:center; gap:6px; }
+  @media (prefers-reduced-transparency: reduce){ .rv-bar,.rv-foot{ background:var(--surface); backdrop-filter:none; -webkit-backdrop-filter:none; } }
+
   .evi-card{ background:var(--surface); border:1px solid var(--ink-12); border-radius:9px; padding:13px; box-shadow:var(--shadow-sm); }
   .evi-card.active{ border-color:oklch(0.325 0.10 262 / 0.40); box-shadow:0 0 0 2px oklch(0.325 0.10 262 / 0.10); }
 
