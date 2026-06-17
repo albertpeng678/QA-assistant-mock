@@ -327,7 +327,7 @@ test("判決閱讀檢視：釘頂被引段落、顯示全文、命中高亮 @mob
   await page.getByLabel("送出").click();
   await expect(page.locator("[data-answer]")).toBeVisible();
   await page.getByRole("button", { name: /展開引證：臺北地院-判決/ }).click();
-  await page.getByRole("button", { name: /閱讀判決全文|展開原文全文/ }).first().click();
+  await page.locator(".evi-card", { hasText: "臺北地院-判決" }).locator("button.open-full").click();
   const rv = page.locator("#reading-view");
   await expect(rv).toHaveClass(/open/);
   await expect(rv.locator(".rv-pin p")).toContainText("應查明後以適當方式通知當事人");
@@ -385,7 +385,7 @@ test("一次一個側欄：開閱讀檢視關引證抽屜、返回鍵重開清�
   await expect(page.locator("[data-answer]")).toBeVisible();
   await page.getByRole("button", { name: /展開引證：臺北地院-判決/ }).click();
   await expect(page.locator("#offcanvas")).toHaveClass(/open/);
-  await page.getByRole("button", { name: /閱讀判決全文|展開原文全文/ }).first().click();
+  await page.locator(".evi-card", { hasText: "臺北地院-判決" }).locator("button.open-full").click();
   const rv = page.locator("#reading-view");
   await expect(rv).toHaveClass(/open/);
   await expect(page.locator("#offcanvas")).not.toHaveClass(/open/);   // 開閱讀檢視 → 引證抽屜自動關
@@ -414,4 +414,28 @@ test("cleanLegalText：去 PDF 斷行/全形空白、硬斷續行接回、結構
   expect(r.wrappedJoined).toBe(true);
   expect(r.headStandalone).toBe(true);
   expect(r.itemNewPara).toBe(true);
+});
+
+test("展開原文：短來源（有 url 的法條）於 offcanvas inline 展開、不開閱讀檢視、結構乾淨", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("輸入法遵問題").fill("個資外洩通報");
+  await page.getByLabel("送出").click();
+  await expect(page.locator("[data-answer]")).toBeVisible();
+  await page.getByRole("button", { name: /展開引證：個人資料保護法-第12條/ }).click();
+  const card = page.locator(".evi-card", { hasText: "個人資料保護法-第12條" });
+  // 有 url 的來源：同時提供「展開原文」(inline) 與次要「官方原文」(外連)
+  await expect(card.getByRole("button", { name: "展開原文" })).toBeVisible();
+  await expect(card.getByRole("link", { name: "官方原文" })).toBeVisible();
+  // 點展開原文 → inline 顯示全文、不觸發閱讀檢視
+  await card.getByRole("button", { name: "展開原文" }).click();
+  await expect(card.locator(".full-text")).toBeVisible();
+  await expect(card.locator(".full-text")).toContainText("通知當事人");
+  await expect(page.locator("#reading-view")).not.toHaveClass(/open/);
+  // 結構整理乾淨：無全形空格、無連續半形空白
+  const txt = await card.locator(".full-text").textContent();
+  expect(txt).not.toMatch(/　/);
+  expect(txt).not.toMatch(/ {2,}/);
+  // 再點一次收合
+  await card.getByRole("button", { name: "展開原文" }).click();
+  await expect(card.locator(".full-text")).toBeHidden();
 });

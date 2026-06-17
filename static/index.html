@@ -675,14 +675,14 @@ function renderEvidence(activeFilename){
   ocBody.innerHTML = header + state.lastEvidence.map((e,i)=>{
     const active = e.filename===activeFilename ? " active" : "";
     const score = (e.score!=null) ? Number(e.score).toFixed(2) : "";
-    // 缺口⑥：有官方原文 url 就給真連結；無 url 才退回展開本地全文
-    const action = e.url
-      ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener noreferrer"
-            class="open-link mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}">
-           <i data-lucide="external-link" class="icon-xs"></i> 開啟官方原文</a>`
-      : `<button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}" data-file-id="${escapeHtml(e.file_id||"")}">
-           <i data-lucide="external-link" class="icon-xs"></i> 展開原文全文</button>
-         <div class="full-text legal-pre hidden font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>`;
+    // 每張卡都可「展開原文」：短→ offcanvas 內 inline、長（判決）→ 閱讀檢視（openFullText 依長度分流）；
+    // 官方 url 降為次要連結，並存而非取代（所有 doc_type 一致）。
+    const action = `<button class="open-full mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--blood)]" data-filename="${escapeHtml(e.filename||"")}" data-file-id="${escapeHtml(e.file_id||"")}">
+           <i data-lucide="chevron-down" class="icon-xs"></i> 展開原文</button>`
+      + (e.url ? `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener noreferrer"
+            class="open-link mt-2 ml-3 inline-flex items-center gap-1 text-[11px] text-[var(--ink-50)]">
+           <i data-lucide="external-link" class="icon-xs"></i> 官方原文</a>` : "")
+      + `<div class="full-text legal-pre hidden font-body text-[13px] leading-relaxed text-[var(--ink-70)] mt-2 pt-2 border-t" style="border-color:var(--ink-12)"></div>`;
     return `
       <div class="evi-card${active}" data-filename="${escapeHtml(e.filename||"")}" data-i="${i}">
         <div class="flex items-center gap-1.5 text-[12px] font-semibold">
@@ -723,7 +723,7 @@ async function openFullText(btn){
     openReadingView(ev, fullText);
   } else if(box){
     if(!box.classList.contains("hidden")){ box.classList.add("hidden"); return; }
-    box.classList.remove("hidden"); box.textContent = fullText; box.dataset.loaded = "1";
+    box.classList.remove("hidden"); box.textContent = cleanLegalText(fullText); box.dataset.loaded = "1";
   }
 }
 
