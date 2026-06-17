@@ -393,3 +393,25 @@ test("一次一個側欄：開閱讀檢視關引證抽屜、返回鍵重開清�
   await expect(rv).not.toHaveClass(/open/);
   await expect(page.locator("#offcanvas")).toHaveClass(/open/);        // 返回 → 重開引證清單
 });
+
+test("cleanLegalText：去 PDF 斷行/全形空白、硬斷續行接回、結構行自成段（真實司法院格式）", async ({ page }) => {
+  await page.goto("/");
+  const r = await page.evaluate(() => {
+    const raw = "　　主　文\r\n一、原判決關於駁回上訴人後開第二項之訴部分及訴訟費用之裁\r\n    判均廢棄。\r\n二、被上訴人應給付上訴人新臺幣捌萬元。\r\n";
+    const c = cleanLegalText(raw);
+    return {
+      noCR: !c.includes("\r"),
+      noFullWidthSpace: !c.includes("　"),
+      noDoubleSpace: !/  /.test(c),
+      wrappedJoined: c.includes("訴訟費用之裁判均廢棄"),   // 硬斷續行接回同段
+      headStandalone: /(^|\n\n)主文(\n\n|$)/.test(c),      // 主文去字間空白、自成段
+      itemNewPara: c.includes("\n\n一、原判決關於"),        // 編號項起新段
+    };
+  });
+  expect(r.noCR).toBe(true);
+  expect(r.noFullWidthSpace).toBe(true);
+  expect(r.noDoubleSpace).toBe(true);
+  expect(r.wrappedJoined).toBe(true);
+  expect(r.headStandalone).toBe(true);
+  expect(r.itemNewPara).toBe(true);
+});

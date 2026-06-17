@@ -691,7 +691,7 @@ function renderEvidence(activeFilename){
           <span class="text-[10px] text-[var(--ink-50)] font-normal">${score}</span>
         </div>
         <div class="evi-cite mt-2"><span class="evi-cite-tag"><i data-lucide="quote" class="icon-xs"></i> 答案引用段落</span>
-          <div class="legal-pre evi-snippet font-body text-[13px] leading-relaxed mt-1">${escapeHtml(e.text||"")}</div></div>
+          <div class="legal-pre evi-snippet font-body text-[13px] leading-relaxed mt-1">${escapeHtml(cleanLegalText(e.text||""))}</div></div>
         ${action}
       </div>`;
   }).join("");
@@ -760,20 +760,44 @@ function findCitedRange(fullText, excerpt){
   return { start, end };
 }
 
-/* 渲染閱讀檢視：釘頂片段（evidence.text）+ 全文 + 盡力高亮 */
+/* 司法院判決原文（PDF→text）清理：去 \r、收斂全形/連續空白、把硬斷續行接回流動段落、
+   結構標記（主文／一、二、…）自成段；回傳以空行分段的乾淨字串。 */
+function cleanLegalText(raw){
+  if(!raw) return "";
+  const isHead = s => /^(主文|事實及理由|事實|理由|爭點|附表|附註|中華民國|來源[:：])/.test(s)
+    || /^[一二三四五六七八九十]+、/.test(s)
+    || /^[（(][一二三四五六七八九十\d]+[)）]/.test(s)
+    || /^\d+[、.．]/.test(s);
+  const out = []; let buf = "";
+  const flush = () => { const b = buf.trim(); if(b) out.push(b); buf = ""; };
+  for(const line of raw.replace(/\r/g,"").split("\n")){
+    const l = line.replace(/　/g," ").replace(/[ \t]+/g," ").trim();
+    if(!l){ flush(); continue; }
+    if(isHead(l.replace(/\s/g,""))){ flush(); buf = l.replace(/\s/g,""); }  // 結構行去字間空白、起新段
+    else { buf += l; }                                                       // 續行接回（CJK 不補空格）
+  }
+  flush();
+  return out.join("\n\n");
+}
+
+/* 渲染閱讀檢視：釘頂片段 + 全文 + 盡力高亮（全文/片段皆先 cleanLegalText 整理排版）*/
 function renderReadingView(ev, fullText){
-  const range = findCitedRange(fullText, ev.text || "");
+  const full = cleanLegalText(fullText);
+  const cite = cleanLegalText(ev.text || "");
+  const range = findCitedRange(full, cite);
   let fullHtml;
   if(range){
-    fullHtml = escapeHtml(fullText.slice(0,range.start))
-      + `<mark class="rv-hit" id="rv-hit">` + escapeHtml(fullText.slice(range.start,range.end)) + `</mark>`
+    // 依換行切段，避免高亮跨段落空隙；首段帶 id 供「跳至引用」捲動
+    const mid = escapeHtml(full.slice(range.start, range.end)).replace(/\n/g, '</mark>\n<mark class="rv-hit">');
+    fullHtml = escapeHtml(full.slice(0,range.start))
+      + `<mark class="rv-hit" id="rv-hit">` + mid + `</mark>`
       + `<span class="rv-hitnote">（自動定位）</span>`
-      + escapeHtml(fullText.slice(range.end));
+      + escapeHtml(full.slice(range.end));
   } else {
-    fullHtml = escapeHtml(fullText);
+    fullHtml = escapeHtml(full);
   }
-  const pin = (ev.text||"").trim()
-    ? `<div class="rv-pin"><span class="tg"><i data-lucide="quote" class="icon-xs"></i> 答案引用段落</span><p>${escapeHtml(ev.text)}</p>${range?`<button class="jump" id="rv-jump">↓ 已在全文中定位</button>`:""}</div>`
+  const pin = cite
+    ? `<div class="rv-pin"><span class="tg"><i data-lucide="quote" class="icon-xs"></i> 答案引用段落</span><p>${escapeHtml(cite)}</p>${range?`<button class="jump" id="rv-jump">↓ 已在全文中定位</button>`:""}</div>`
     : "";
   rvBody.innerHTML = pin
     + `<div class="rv-flabel"><i data-lucide="file-text" class="icon-xs"></i> 判決全文</div>`
