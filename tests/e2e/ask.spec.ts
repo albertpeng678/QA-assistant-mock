@@ -238,8 +238,8 @@ test.describe("法遵 RAG 問答 E2E", () => {
     });
 
     await test.step("判決見解卡顯示 snippet 文字", async () => {
-      // snippet 含「通知義務」（來自 evidence text）
-      await expect(judgmentCard).toContainText("通知義務");
+      // snippet 含「通知當事人」（來自 evidence text）
+      await expect(judgmentCard).toContainText("通知當事人");
     });
 
     await test.step("無 url → 不渲染外連 a.open-link（優雅降級）", async () => {
@@ -249,17 +249,15 @@ test.describe("法遵 RAG 問答 E2E", () => {
       await expect(judgmentCard.locator("button.open-full")).toBeVisible();
     });
 
-    await test.step("點「展開原文全文」→ 以 file_id 取回完整判決書", async () => {
+    await test.step("點「展開原文全文」→ 長文路由至閱讀檢視（非 inline）", async () => {
       await judgmentCard.locator("button.open-full").click();
-      const full = judgmentCard.locator(".full-text");
-      await expect(full).toBeVisible();
-      // 完整判決書內容（/api/source_vs，非 snippet）：含案號與主文結尾
-      await expect(full).toContainText("112年度訴字第999號");
-      await expect(full).toContainText("中華民國113年6月26日");
-    });
-
-    await test.step("再點一次 → 收合全文", async () => {
-      await judgmentCard.locator("button.open-full").click();
+      // 判決全文長度超過 READING_VIEW_THRESHOLD（600 字）→ 開啟閱讀檢視
+      const rv = page.locator("#reading-view");
+      await expect(rv).toHaveClass(/open/);
+      // 閱讀檢視內含完整判決書內容
+      await expect(rv.locator(".rv-full")).toContainText("112年度訴字第999號");
+      await expect(rv.locator(".rv-full")).toContainText("中華民國113年6月26日");
+      // inline .full-text 不顯示（長文已移至閱讀檢視）
       await expect(judgmentCard.locator(".full-text")).toBeHidden();
     });
   });
@@ -321,4 +319,18 @@ test("判決閱讀檢視：容器存在且預設關閉", async ({ page }) => {
   const rv = page.locator("#reading-view");
   await expect(rv).toHaveCount(1);
   await expect(rv).not.toHaveClass(/open/);
+});
+
+test("判決閱讀檢視：釘頂被引段落、顯示全文、命中高亮 @mobile", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("輸入法遵問題").fill("個資外洩通報");
+  await page.getByLabel("送出").click();
+  await expect(page.locator("[data-answer]")).toBeVisible();
+  await page.getByRole("button", { name: /展開引證：臺北地院-判決/ }).click();
+  await page.getByRole("button", { name: /閱讀判決全文|展開原文全文/ }).first().click();
+  const rv = page.locator("#reading-view");
+  await expect(rv).toHaveClass(/open/);
+  await expect(rv.locator(".rv-pin p")).toContainText("應查明後以適當方式通知當事人");
+  await expect(rv.locator(".rv-full")).toContainText("臺灣臺北地方法院民事判決");
+  await expect(rv.locator(".rv-full mark.rv-hit")).toHaveCount(1);
 });

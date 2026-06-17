@@ -698,29 +698,29 @@ function renderEvidence(activeFilename){
   if(act) act.scrollIntoView({ block:"nearest" });
 }
 
-/* —— 抽屜內展開原文全文 —— */
+/* —— 抽屜內展開原文全文（長文路由至閱讀檢視，短文維持 inline）—— */
 async function openFullText(btn){
   const card = btn.closest(".evi-card");
   const box = card.querySelector(".full-text");
-  if(!box.classList.contains("hidden")){ box.classList.add("hidden"); return; }
-  box.classList.remove("hidden");
-  if(box.dataset.loaded === "1") return;   // toggle 快取：再展開不重打 API
-  box.textContent = "載入中…";
-  // 判決等無本地檔的來源：優先以 file_id 自 vector store 取回全文（/api/source_vs）；
-  // 無 file_id（舊資料/法條）退回本地 /api/source。兩路皆失敗 → 友善降級保留 snippet。
   const fid = btn.dataset.fileId;
-  const endpoints = [];
-  if(fid) endpoints.push("/api/source_vs/"+encodeURIComponent(fid));
-  endpoints.push("/api/source/"+encodeURIComponent(btn.dataset.filename));
-  for(const ep of endpoints){
-    try{
-      const r = await fetch(ep);
-      if(!r.ok) continue;
-      const { text } = await r.json();
-      if(text){ box.textContent = text; box.dataset.loaded = "1"; return; }
-    }catch{ /* 換下一個端點 */ }
+  const fname = btn.dataset.filename;
+  const ev = (state.lastEvidence || []).find(e => (e.filename||"") === fname) || { filename:fname, text:"" };
+  let fullText = (box && box.dataset.loaded === "1") ? box.textContent : null;
+  if(fullText == null){
+    const endpoints = [];
+    if(fid) endpoints.push("/api/source_vs/"+encodeURIComponent(fid));
+    endpoints.push("/api/source/"+encodeURIComponent(fname));
+    for(const ep of endpoints){
+      try{ const r = await fetch(ep); if(!r.ok) continue; const d = await r.json(); if(d.text){ fullText = d.text; break; } }catch{}
+    }
   }
-  box.textContent = "原文尚未建立索引，請參考上方摘要。";
+  if(fullText == null){ if(box){ box.classList.remove("hidden"); box.textContent = "原文尚未建立索引，請參考上方摘要。"; } return; }
+  if(fullText.length >= READING_VIEW_THRESHOLD){
+    openReadingView(ev, fullText);
+  } else if(box){
+    if(!box.classList.contains("hidden")){ box.classList.add("hidden"); return; }
+    box.classList.remove("hidden"); box.textContent = fullText; box.dataset.loaded = "1";
+  }
 }
 
 function openOffcanvas(activeFilename){ renderEvidence(activeFilename); scrim.classList.add("open"); offcanvas.classList.add("open"); }
@@ -732,6 +732,54 @@ document.getElementById("ham").addEventListener("click", ()=>
 document.getElementById("oc-close").addEventListener("click", closeOffcanvas);
 scrim.addEventListener("click", closeOffcanvas);
 document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeOffcanvas(); });
+
+/* 正規化模糊比對：以被引片段為錨點，回傳全文中 [start,end) 或 null */
+function findCitedRange(fullText, excerpt){
+  if(!fullText || !excerpt) return null;
+  const nf = fullText.replace(/\s+/g, "");
+  const ne = excerpt.replace(/\s+/g, "");
+  if(!ne) return null;
+  const map = []; for(let i=0;i<fullText.length;i++){ if(!/\s/.test(fullText[i])) map.push(i); }
+  for(const probe of [ne, ne.slice(0,24)]){
+    if(probe.length < 8) continue;
+    const at = nf.indexOf(probe);
+    if(at >= 0){
+      const start = map[at];
+      const end = map[Math.min(at + probe.length, map.length) - 1] + 1;
+      return { start, end };
+    }
+  }
+  return null;
+}
+
+/* 渲染閱讀檢視：釘頂片段（evidence.text）+ 全文 + 盡力高亮 */
+function renderReadingView(ev, fullText){
+  const range = findCitedRange(fullText, ev.text || "");
+  let fullHtml;
+  if(range){
+    fullHtml = escapeHtml(fullText.slice(0,range.start))
+      + `<mark class="rv-hit" id="rv-hit">` + escapeHtml(fullText.slice(range.start,range.end)) + `</mark>`
+      + `<span class="rv-hitnote">（自動定位）</span>`
+      + escapeHtml(fullText.slice(range.end));
+  } else {
+    fullHtml = escapeHtml(fullText);
+  }
+  const pin = (ev.text||"").trim()
+    ? `<div class="rv-pin"><span class="tg"><i data-lucide="quote" class="icon-xs"></i> 答案引用段落</span><p>${escapeHtml(ev.text)}</p>${range?`<button class="jump" id="rv-jump">↓ 已在全文中定位</button>`:""}</div>`
+    : "";
+  rvBody.innerHTML = pin
+    + `<div class="rv-flabel"><i data-lucide="file-text" class="icon-xs"></i> 判決全文</div>`
+    + `<div class="rv-full">${fullHtml}</div>`;
+  document.getElementById("rv-title").textContent = ev.filename || "原文";
+  document.getElementById("rv-meta").textContent = "";
+  const ext = document.getElementById("rv-ext");
+  if(ev.url){ ext.href = ev.url; ext.classList.remove("hidden"); } else { ext.classList.add("hidden"); }
+  rvBody.scrollTop = 0;
+  icons();
+  const jump = document.getElementById("rv-jump");
+  if(jump) jump.addEventListener("click", ()=> document.getElementById("rv-hit")?.scrollIntoView({ block:"center", behavior:"smooth" }));
+}
+function openReadingView(ev, fullText){ renderReadingView(ev, fullText); rvScrim.classList.add("open"); readingView.classList.add("open"); }
 
 /* —— 判決閱讀檢視控制 —— */
 const READING_VIEW_THRESHOLD = 600;
