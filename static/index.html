@@ -760,6 +760,39 @@ function findCitedRange(fullText, excerpt){
   return { start, end };
 }
 
+/* 多段定位:把被引段落對回全文的「所有」命中區段(聯集,只多不少)。
+   業界主流(Claude Citations 切句定位 / LangExtract)= 逐段定位再各自高亮;
+   實測 60 筆真實判決:單一最長前綴對「拼接/非連續 chunk」只標到第一截,
+   故改取聯集 = ① 整段最長前綴(地板,保證不退步)② 逐段 exact 各自定位
+   ③ 合併重疊/相鄰。<12 字段落不採用(防短碎片誤標,依真實資料校準)。 */
+function findCitedRanges(fullText, excerpt){
+  if(!fullText || !excerpt) return [];
+  const nf = fullText.replace(/\s+/g, "");
+  if(!nf) return [];
+  const map = []; for(let i=0;i<fullText.length;i++){ if(!/\s/.test(fullText[i])) map.push(i); }
+  const toRange = (atNorm, lenNorm) => ({ start: map[atNorm], end: map[Math.min(atNorm + lenNorm, map.length) - 1] + 1 });
+  const ranges = [];
+  // ① 整段最長可命中前綴(地板):確保永不比舊版少標
+  const ne = excerpt.replace(/\s+/g, "");
+  if(ne.length >= 12){
+    let lo = 12, hi = ne.length, best = 0;
+    while(lo <= hi){ const mid = (lo + hi) >> 1; if(nf.indexOf(ne.slice(0, mid)) >= 0){ best = mid; lo = mid + 1; } else hi = mid - 1; }
+    if(best >= 12){ const at = nf.indexOf(ne.slice(0, best)); if(at >= 0) ranges.push(toRange(at, best)); }
+  }
+  // ② 逐段 exact:每段(≥12字)各自定位,救回拼接/非連續引用
+  for(const seg of excerpt.split("\n")){
+    const ns = seg.replace(/\s+/g, "");
+    if(ns.length < 12) continue;
+    const at = nf.indexOf(ns);
+    if(at >= 0) ranges.push(toRange(at, ns.length));
+  }
+  // ③ 合併重疊/相鄰 → 聯集
+  ranges.sort((a, b) => a.start - b.start);
+  const merged = [];
+  for(const r of ranges){ const last = merged[merged.length - 1]; if(last && r.start <= last.end){ last.end = Math.max(last.end, r.end); } else merged.push({ ...r }); }
+  return merged;
+}
+
 /* 司法院/法規 PDF→text 清理（doc_type/領域/法院無關，純通用結構訊號；非關鍵字列舉）。
    依社群主流 text-unwrap 啟發法 + 對本語料 5 種 doc_type 實測校準：
    - 行尾為終止標點（。！？：；）→ 真實段界，收段（法條每「項」、判決每句群各自成段）
@@ -790,20 +823,24 @@ function cleanLegalText(raw){
 function renderReadingView(ev, fullText){
   const full = cleanLegalText(fullText);
   const cite = cleanLegalText(ev.text || "");
-  const range = findCitedRange(full, cite);
+  const ranges = findCitedRanges(full, cite);   // 多段聯集定位
   let fullHtml;
-  if(range){
-    // 依換行切段，避免高亮跨段落空隙；首段帶 id 供「跳至引用」捲動
-    const mid = escapeHtml(full.slice(range.start, range.end)).replace(/\n/g, '</mark>\n<mark class="rv-hit">');
-    fullHtml = escapeHtml(full.slice(0,range.start))
-      + `<mark class="rv-hit" id="rv-hit">` + mid + `</mark>`
-      + `<span class="rv-hitnote">（自動定位）</span>`
-      + escapeHtml(full.slice(range.end));
+  if(ranges.length){
+    // 逐段插入 <mark>；每段內遇換行斷開 mark，避免高亮跨段落空隙；首段帶 id 供捲動
+    let html = "", pos = 0;
+    ranges.forEach((r, i) => {
+      html += escapeHtml(full.slice(pos, r.start));
+      const seg = escapeHtml(full.slice(r.start, r.end)).replace(/\n/g, '</mark>\n<mark class="rv-hit">');
+      html += `<mark class="rv-hit"${i === 0 ? ' id="rv-hit"' : ''}>` + seg + `</mark>`;
+      pos = r.end;
+    });
+    html += escapeHtml(full.slice(pos));
+    fullHtml = html;
   } else {
     fullHtml = escapeHtml(full);
   }
   const pin = cite
-    ? `<div class="rv-pin"><span class="tg"><i data-lucide="quote" class="icon-xs"></i> 答案引用段落</span><p>${escapeHtml(cite)}</p>${range?`<button class="jump" id="rv-jump">↓ 已在全文中定位</button>`:""}</div>`
+    ? `<div class="rv-pin"><span class="tg"><i data-lucide="quote" class="icon-xs"></i> 答案引用段落</span><p>${escapeHtml(cite)}</p>${ranges.length?`<button class="jump" id="rv-jump">↓ 已在全文中定位</button>`:""}</div>`
     : "";
   rvBody.innerHTML = pin
     + `<div class="rv-flabel"><i data-lucide="file-text" class="icon-xs"></i> 判決全文</div>`

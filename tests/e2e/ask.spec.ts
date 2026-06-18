@@ -457,3 +457,42 @@ test("釘頂引用段落保留段落結構（pre-wrap，不被壓成一行純文
   const ws = await page.locator("#reading-view .rv-pin p").evaluate(el => getComputedStyle(el).whiteSpace);
   expect(ws).toMatch(/pre-wrap|pre-line/);
 });
+
+test("findCitedRanges：拼接(非連續)被引段落回傳多段、連續則單段(不退步)、全失則空", async ({ page }) => {
+  await page.goto("/");
+  const res = await page.evaluate(() => {
+    const full = "前言甲乙丙丁戊己。第一個可定位的判決理由內容文字共十餘字。中間有一堆無關的內容描述很多字句。第二個可定位的判決理由內容文字共十餘字。結尾庚辛。";
+    const merged = "第一個可定位的判決理由內容文字共十餘字。\n第二個可定位的判決理由內容文字共十餘字。";
+    const mr = findCitedRanges(full, merged);
+    const cr = findCitedRanges(full, "第一個可定位的判決理由內容文字共十餘字。");
+    const miss = findCitedRanges(full, "完全不存在於全文的引用片段甲乙丙丁戊己庚辛壬癸");
+    return {
+      mergedCount: mr.length,
+      covA: mr.some(r => full.slice(r.start, r.end).includes("第一個")),
+      covB: mr.some(r => full.slice(r.start, r.end).includes("第二個")),
+      midClean: !mr.some(r => full.slice(r.start, r.end).includes("一堆無關")),
+      contigCount: cr.length,
+      missCount: miss.length,
+    };
+  });
+  expect(res.mergedCount).toBe(2);   // 拼接 → 兩段各自命中
+  expect(res.covA).toBe(true);
+  expect(res.covB).toBe(true);
+  expect(res.midClean).toBe(true);   // 中間無關內容不被誤標
+  expect(res.contigCount).toBe(1);   // 連續 → 單段(不退步)
+  expect(res.missCount).toBe(0);
+});
+
+test("閱讀檢視:拼接被引段落多段高亮、中間不誤標", async ({ page }) => {
+  await page.goto("/");
+  const res = await page.evaluate(() => {
+    const full = "前言甲乙丙丁戊己。第一個可定位的判決理由內容文字共十餘字。中間有一堆無關的內容描述很多字句。第二個可定位的判決理由內容文字共十餘字。結尾庚辛。";
+    const merged = "第一個可定位的判決理由內容文字共十餘字。\n第二個可定位的判決理由內容文字共十餘字。";
+    openReadingView({ filename: "拼接判決.txt", text: merged }, full);
+    const marks = [...document.querySelectorAll("#reading-view mark.rv-hit")].map(m => m.textContent).join("|");
+    return { hasA: marks.includes("第一個"), hasB: marks.includes("第二個"), midClean: !marks.includes("一堆無關") };
+  });
+  expect(res.hasA).toBe(true);
+  expect(res.hasB).toBe(true);    // 現行單前綴只標 A → 此處 RED
+  expect(res.midClean).toBe(true);
+});
