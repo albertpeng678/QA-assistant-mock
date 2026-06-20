@@ -99,12 +99,11 @@ def derive_attributes(filename: str, law_index=None, first_line: str = None) -> 
         eff = meta.get("發文日") or meta.get("發布日") or meta.get("裁判日")
         if eff:
             attrs["effective_date"] = eff
-        if law_index and article:
-            pcode = law_index.get(law, "")
-            flno = article_to_flno(article)
-            # 僅阿拉伯數字條號才組 url，避免中文數字條號（如「四十五」）產生指向錯誤的連結（稽核 P2）。
-            if pcode and flno and re.fullmatch(r"[\d-]+", flno):
-                attrs["url"] = _LAW_SINGLE_URL.format(pcode=pcode, flno=flno)
+        # URL：非條文素材的「對應條號」只是參考標籤，不能用來組法條頁 URL。
+        # 優先採用 metadata 中的 url 欄位（若有）；否則不設 url（前端自動隱藏連結）。
+        meta_url = meta.get("url", "")
+        if meta_url and meta_url.startswith("http"):
+            attrs["url"] = meta_url
         return attrs
 
     m = _FILENAME_RE.match(stem)

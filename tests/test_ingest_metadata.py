@@ -144,3 +144,84 @@ def test_derive_attributes_no_url_when_pcode_missing():
     law_index = {"個人資料保護法": ""}
     attrs = derive_attributes("個人資料保護法-第12條.txt", law_index=law_index)
     assert "url" not in attrs
+
+
+# --- FAQ/函釋 不應用法條 URL（bug fix）--------------------------------------
+
+def test_faq_should_not_get_law_article_url():
+    """FAQ 的「對應條號」只是參考標籤，不能用來組法條 URL。"""
+    law_index = {"勞動基準法": "N0030001"}
+    first = "來源:勞動部 | 效力:FAQ | 發布日:2023-01-01 | 對應條號:第24條 | 母法:勞動基準法"
+    attrs = derive_attributes("勞動-FAQ-加班費如何計算.txt",
+                              law_index=law_index, first_line=first)
+    assert attrs["doc_type"] == "FAQ"
+    assert "url" not in attrs
+
+
+def test_hanshi_should_not_get_law_article_url():
+    """函釋的「對應條號」只是參考標籤，不能用來組法條 URL。"""
+    law_index = {"證券交易法": "G0400001"}
+    first = ("來源:金管會 | 效力:函釋 | 字號:金管銀法字第10300212700號 | "
+             "發文日:2014-03-05 | 對應條號:第41條 | 母法:證券交易法")
+    attrs = derive_attributes("證券-函釋-某案.txt",
+                              law_index=law_index, first_line=first)
+    assert attrs["doc_type"] == "函釋"
+    assert "url" not in attrs
+
+
+def test_faq_with_explicit_url_in_metadata():
+    """若 FAQ 首行 metadata 含 url 欄位，直接採用。"""
+    first = ("來源:公平交易委員會 | 效力:FAQ | 對應條號:第15條 | 母法:公平交易法 | "
+             "url:https://www.ftc.gov.tw/internet/main/doc/docDetail.aspx?uid=126")
+    attrs = derive_attributes("公平交易-FAQ-公會訂定參考價格.txt", first_line=first)
+    assert attrs["url"] == "https://www.ftc.gov.tw/internet/main/doc/docDetail.aspx?uid=126"
+
+
+def test_hanshi_with_explicit_url_in_metadata():
+    """若函釋首行 metadata 含 url 欄位，直接採用。"""
+    law_index = {"個人資料保護法": "I0050021"}
+    first = ("來源:國發會 | 效力:函釋 | 字號:發法字第1131200456號 | "
+             "發文日:2024-06-01 | 對應條號:第12條 | 母法:個人資料保護法 | "
+             "url:https://www.ndc.gov.tw/Content_List.aspx?n=B3D59B291A3E081A")
+    attrs = derive_attributes("個資-函釋-外洩通報.txt",
+                              law_index=law_index, first_line=first)
+    assert attrs["url"] == "https://www.ndc.gov.tw/Content_List.aspx?n=B3D59B291A3E081A"
+    assert "LawSingle" not in attrs["url"]
+
+
+def test_law_article_url_unchanged():
+    """法條的 URL 行為不受影響。"""
+    law_index = {"個人資料保護法": "I0050021"}
+    attrs = derive_attributes("個人資料保護法-第12條.txt", law_index=law_index)
+    assert attrs["url"] == (
+        "https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=I0050021&flno=12"
+    )
+
+
+def test_enforcement_rules_url_unchanged():
+    """施行細則的 URL 行為不受影響。"""
+    law_index = {"個人資料保護法施行細則": "I0050022"}
+    attrs = derive_attributes("個人資料保護法施行細則-第12條.txt", law_index=law_index)
+    assert attrs["url"] == (
+        "https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=I0050022&flno=12"
+    )
+
+
+def test_judgment_no_url():
+    """判決不應有 URL（使用 /api/source_vs 取全文）。"""
+    law_index = {"公司法": "J0080001"}
+    first = "來源:司法院 | 效力:判決 | 裁判日:2025-01-15 | 對應條號:第23條 | 母法:公司法"
+    attrs = derive_attributes("高法-判決-某案.txt",
+                              law_index=law_index, first_line=first)
+    assert attrs["doc_type"] == "判決"
+    assert "url" not in attrs
+
+
+def test_caifa_no_url():
+    """裁罰不應有法條頁 URL。"""
+    law_index = {"個人資料保護法": "I0050021"}
+    first = "來源:國發會 | 效力:裁罰 | 對應條號:第48條 | 母法:個人資料保護法"
+    attrs = derive_attributes("個資-裁罰-某案.txt",
+                              law_index=law_index, first_line=first)
+    assert attrs["doc_type"] == "裁罰"
+    assert "url" not in attrs
