@@ -114,15 +114,18 @@ class TestDeriveAttributesWithBodyUrl:
         )
         assert attrs["url"] == "https://cpc.ey.gov.tw/Page/AAAA/bbbb"
 
-    def test_company_law_hanshi_no_url_without_deep_link(self):
-        """經濟部公司法函釋無 deep link body URL → 不應有 url attr。"""
+    def test_company_law_hanshi_gets_gcis_url(self):
+        """經濟部公司法函釋無 deep link → fallback 建構 GCIS 逐條函釋頁 URL。"""
         from scripts.ingest import derive_attributes
         first_line = "來源:經濟部 | 效力:函釋 | 字號:經商字第095 | 發文日:2006-07-14 | 對應條號:第204條 | 母法:公司法"
         attrs = derive_attributes(
             "公司-函釋-某案.txt",
             first_line=first_line, body_text=first_line + "\n\n主旨：某某...",
         )
-        assert "url" not in attrs
+        assert attrs["url"] == (
+            "https://gcis.nat.gov.tw/elaw/constructionDetailFromSingleLaw"
+            "?lawCode=19&art=204&dash=0&ln=zh"
+        )
 
     def test_pdpc_hanshi_homepage_not_in_attrs(self):
         """PDPC 函釋 body 只有首頁 URL → 不應有 url attr。"""
@@ -153,6 +156,114 @@ class TestDeriveAttributesWithBodyUrl:
             first_line=first_line, body_text=body,
         )
         assert attrs["url"] == "https://www.ftc.gov.tw/specific-page"
+
+    def test_mol_hanshi_gets_flawdoc_url(self):
+        """勞動部函釋有字號 → 建構 FLAWDOC03 全文內容頁 URL（N2=純數字文號）。
+
+        FINTQRY05 經 Playwright 驗證只到「相關法條」導覽頁、無全文；
+        FLAWDOC03 冷開 GET 即回完整主旨/說明，且只需 N2（字號數字）。
+        """
+        from scripts.ingest import derive_attributes
+        first_line = (
+            "來源:勞動部 | 效力:函釋 | 字號:勞動條2字第1060131476號函 "
+            "| 發文日:2017-08-03 | 對應條號:第30條 | 母法:勞動基準法"
+        )
+        attrs = derive_attributes(
+            "勞動-函釋-某案.txt",
+            first_line=first_line, body_text=first_line + "\n\n主旨：...",
+        )
+        assert "url" in attrs
+        assert "FLAWDOC03" in attrs["url"]
+        assert "N2=1060131476" in attrs["url"]
+        # 單一文件查詢的固定分頁參數，缺了會系統錯誤
+        assert "datatype=etype" in attrs["url"]
+        assert "recordno=1" in attrs["url"]
+
+    def test_sfb_insider_faq_gets_pdf_url(self):
+        """證期局內線交易 FAQ（對應 §157-1）→ 內線交易問答集 PDF 直接載點。
+
+        SFB Q&A 經 Playwright 親驗：無 HTML 個別頁，全封裝於分類頁的 PDF。
+        對應條號 §157-1 → 內線交易問答集.pdf。
+        """
+        from scripts.ingest import derive_attributes
+        first_line = (
+            "來源:金融監督管理委員會證券期貨局 | 效力:FAQ "
+            "| 對應條號:第157-1條 | 母法:證券交易法"
+        )
+        attrs = derive_attributes(
+            "證券-FAQ-何謂內線交易及其立法目的.txt", first_line=first_line,
+        )
+        assert "url" in attrs
+        assert attrs["url"].endswith("flag=doc")
+        assert "202511180853170.pdf" in attrs["url"]
+
+    def test_sfb_shareholding_faq_gets_pdf_url(self):
+        """證期局股權申報 FAQ（對應 §22-2）→ 內部人股權申報問答集 PDF 直接載點。"""
+        from scripts.ingest import derive_attributes
+        first_line = (
+            "來源:金融監督管理委員會證券期貨局 | 效力:FAQ "
+            "| 對應條號:第22-2條 | 母法:證券交易法"
+        )
+        attrs = derive_attributes(
+            "證券-FAQ-何謂事前申報.txt", first_line=first_line,
+        )
+        assert "url" in attrs
+        assert "201908191647390.pdf" in attrs["url"]
+
+    def test_gcis_zhi_subarticle_gets_dashed_url(self):
+        """公司法「之」格式條號（第172之1條）→ GCIS dash 參數（art=172&dash=1）。
+
+        Playwright 親驗：constructionDetailFromSingleLaw?lawCode=19&art=172&dash=1
+        內容為第172條之1（股東提案）全文。原僅 split('-') 會漏「之」格式而降級到
+        法規總覽頁；須將「之」正規化為 dash。
+        """
+        from scripts.ingest import derive_attributes
+        first_line = "來源:經濟部 | 效力:函釋 | 字號:經商字第123 | 對應條號:第172之1條 | 母法:公司法"
+        attrs = derive_attributes(
+            "公司-函釋-股東提案之審查權.txt",
+            first_line=first_line, body_text=first_line + "\n\n主旨：...",
+        )
+        assert attrs["url"] == (
+            "https://gcis.nat.gov.tw/elaw/constructionDetailFromSingleLaw"
+            "?lawCode=19&art=172&dash=1&ln=zh"
+        )
+
+    def test_gcis_repealed_subarticle_falls_back_to_overview(self):
+        """已廢止條號（公司法第402之1條）→ 母法總覽頁，非死的逐條頁。
+
+        Playwright 親驗 art=402&dash=1 為「（刪除）查無結果」空頁、0 函釋；
+        指向它即「點開沒到內容頁」。改退母法總覽頁（parent law）。
+        """
+        from scripts.ingest import derive_attributes
+        first_line = "來源:經濟部 | 效力:函釋 | 字號:經商字第456 | 對應條號:第402之1條 | 母法:公司法"
+        attrs = derive_attributes(
+            "公司-函釋-停業申請人停業期間限制疑義.txt",
+            first_line=first_line, body_text=first_line + "\n\n主旨：...",
+        )
+        assert attrs["url"] == (
+            "https://gcis.nat.gov.tw/elaw/getElawView?ln=zh&elawKey=19"
+        )
+        assert "constructionDetailFromSingleLaw" not in attrs["url"]
+
+    def test_gcis_business_dept_source_still_matched(self):
+        """商業發展署來源（收緊後不用裸『商業』）仍正確進 GCIS。"""
+        from scripts.ingest import derive_attributes
+        first_line = "來源:經濟部商業發展署 | 效力:函釋 | 對應條號:第10條 | 母法:公司法"
+        attrs = derive_attributes(
+            "公司-函釋-某商業署案.txt",
+            first_line=first_line, body_text=first_line + "\n\n主旨：...",
+        )
+        assert "constructionDetailFromSingleLaw" in attrs["url"]
+        assert "art=10&dash=0" in attrs["url"]
+
+    def test_sfb_faq_unknown_article_no_url(self):
+        """證期局 FAQ 但對應條號非 §157-1/§22-2 → 不亂給 PDF（無 url）。"""
+        from scripts.ingest import derive_attributes
+        first_line = "來源:金融監督管理委員會證券期貨局 | 效力:FAQ | 對應條號:第36條 | 母法:證券交易法"
+        attrs = derive_attributes(
+            "證券-FAQ-某未知條號案.txt", first_line=first_line,
+        )
+        assert "url" not in attrs
 
     def test_faq_without_deep_link_no_url(self):
         """無 deep link 的 FAQ → 不應有 url attr（不退回首頁）。"""

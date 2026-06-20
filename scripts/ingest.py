@@ -59,18 +59,48 @@ _LAW_SINGLE_URL = "https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode={pcode}&
 # 不是有效語料來源頁的 domain，extract_url_from_body 應忽略。
 _IGNORED_URL_DOMAINS = {"law.moj.gov.tw", "210.69.121.50", "gcis.nat.gov.tw"}
 
-# 機構 → 法規查詢入口頁（construct_institutional_url 用）。
-_INSTITUTIONAL_URLS = {
-    "gcis": "https://gcis.nat.gov.tw/elaw/lawDtlAction.do?method=lawToCons&pk=19&art={art}&dash={dash}",
-    "gcis_home": "https://gcis.nat.gov.tw/elaw/",
-    "fsc": "https://law.fsc.gov.tw/",
-    "mol": "https://laws.mol.gov.tw/",
-    "pdpc": "https://www.pdpc.gov.tw/",
-    "ftc": "https://www.ftc.gov.tw/",
-    "cpc": "https://cpc.ey.gov.tw/",
-    "sfb": "https://www.sfb.gov.tw/",
-    "amld": "https://www.amld.moj.gov.tw/",
-}
+# GCIS 逐條函釋頁 URL 模板（新版網站，2025+ 確認可用）。
+_GCIS_CONSTRUCTION_URL = (
+    "https://gcis.nat.gov.tw/elaw/constructionDetailFromSingleLaw"
+    "?lawCode={lawCode}&art={art}&dash={dash}&ln=zh"
+)
+# GCIS 法規 → lawCode 對照。
+_GCIS_LAW_CODES = {"公司法": "19", "商業登記法": "38"}
+# GCIS 法規總覽頁（條號不明或條號已廢止時 fallback）。
+_GCIS_LAW_VIEW_URL = "https://gcis.nat.gov.tw/elaw/getElawView?ln=zh&elawKey={lawCode}"
+# 已廢止/刪除條號 (lawCode, art, dash)——逐條頁顯示「（刪除）查無結果」空頁，
+# 指向它即「點開沒到內容頁」，改退母法總覽頁。Playwright 親驗：公司法第402條之1、
+# 第317條之3 皆已刪除、0 函釋（其餘 20 個「之」條號均有內容）。
+_GCIS_REPEALED_ARTICLES = {("19", "402", "1"), ("19", "317", "3")}
+
+# MOL 函釋全文內容頁 URL 模板（勞動法令查詢系統 FLAWDOC03）。
+# FINTQRY05 經 Playwright 驗證只到「相關法條」導覽頁、無全文；FLAWDOC03 冷開 GET
+# 即回完整主旨/說明，且只需 N2（純數字文號）。固定分頁參數缺一即系統錯誤。
+_MOL_HANSHI_URL = (
+    "https://laws.mol.gov.tw/FLAW/FLAWDOC03.aspx"
+    "?datatype=etype&N2={eno}&cnt=1&now=1&lnabndn=1&recordno=1"
+)
+# SFB 證期局問答集 PDF 直接載點（Playwright 親驗：SFB Q&A 無 HTML 個別頁，
+# 全封裝於分類頁 PDF）。依對應條號分流：§157-1=內線交易、§22-2=內部人股權申報。
+_SFB_INSIDER_PDF = (
+    "https://www.sfb.gov.tw/uploaddowndoc?file=chdownload/202511180853170.pdf"
+    "&filedisplay=%E5%85%A7%E7%B7%9A%E4%BA%A4%E6%98%93%E5%95%8F%E7%AD%94%E9%9B%86.pdf&flag=doc"
+)
+_SFB_SHAREHOLDING_PDF = (
+    "https://www.sfb.gov.tw/uploaddowndoc?file=chdownload/201908191647390.pdf"
+    "&filedisplay=114.3%E5%85%A7%E9%83%A8%E4%BA%BA%E8%82%A1%E6%AC%8A%E7%94%B3%E5%A0%B1%E5%95%8F%E7%AD%94%E9%9B%86.pdf&flag=doc"
+)
+
+# 字號 → (ecase, eno) 解析。
+_REFNO_RE = re.compile(r"^(?P<ecase>.+?)字第\s*(?P<eno>[\dA-Za-z]+)\s*號")
+
+
+def _parse_mol_refno(ref_no: str) -> tuple[str, str]:
+    """從勞動部字號解析 ecase 和 eno。回傳 (ecase, eno) 或 ("", "")。"""
+    m = _REFNO_RE.match(ref_no or "")
+    if not m:
+        return "", ""
+    return m.group("ecase").strip(), m.group("eno").strip()
 
 
 def _is_homepage_url(url: str) -> bool:
@@ -99,43 +129,45 @@ def extract_url_from_body(body_text: str) -> str:
     return ""
 
 
-def construct_institutional_url(doc_type: str, source: str, law: str, article: str) -> str:
-    """從 metadata 建構機構法規查詢頁 URL。
+def construct_institutional_url(doc_type: str, source: str, law: str, article: str,
+                                ref_no: str = "", effective_date: str = "") -> str:
+    """從 metadata 建構來源機構的特定內容頁 URL。
 
-    判決走 /api/source_vs，不給 URL。其餘依來源機構對應。
-    公司法函釋特殊：有對應條號時建構 GCIS 逐條函釋頁。
+    判決走 /api/source_vs，不給 URL。
+    GCIS（經濟部/商業發展署/臺北市商業處）有逐條函釋頁；
+    MOL（勞動部）有 FLAWDOC03 逐件函釋全文頁（需字號）；
+    SFB（證期局）Q&A 無 HTML 個別頁，依條號給對應問答集 PDF 載點。
     """
     if doc_type in ("判決", "裁罰"):
         return ""
     src = source or ""
-    if "經濟部" in src or law == "商業登記法":
-        if law == "公司法" and article:
-            flno = article.replace("第", "").replace("條", "").strip()
-            if "-" in flno:
-                parts = flno.split("-", 1)
-                return _INSTITUTIONAL_URLS["gcis"].format(art=parts[0], dash=parts[1])
-            return _INSTITUTIONAL_URLS["gcis"].format(art=flno, dash="0")
-        return _INSTITUTIONAL_URLS["gcis_home"]
-    if "金管會" in src or "金融監督" in src:
-        return _INSTITUTIONAL_URLS["fsc"]
-    if "勞動" in src:
-        return _INSTITUTIONAL_URLS["mol"]
-    if "個人資料保護" in src or "個資" in src or "國家發展委員會" in src or "國發會" in src:
-        return _INSTITUTIONAL_URLS["pdpc"]
-    if "公平交易" in src:
-        return _INSTITUTIONAL_URLS["ftc"]
-    if "消費者保護" in src:
-        return _INSTITUTIONAL_URLS["cpc"]
-    if "法務部" in src:
-        if "洗錢" in law:
-            return _INSTITUTIONAL_URLS["amld"]
+    # ── SFB 證期局問答集（PDF 直接載點，依對應條號分流）──
+    if "證券期貨局" in src or "證期局" in src:
+        if "157-1" in article:
+            return _SFB_INSIDER_PDF
+        if "22-2" in article:
+            return _SFB_SHAREHOLDING_PDF
         return ""
-    if "臺北市" in src and "商業" in src:
-        return _INSTITUTIONAL_URLS["gcis_home"]
-    if "臺北市" in src and "勞動" in src:
-        return _INSTITUTIONAL_URLS["mol"]
-    if "證券" in src or "期貨" in src:
-        return _INSTITUTIONAL_URLS["sfb"]
+    # ── GCIS 系列（經濟部、商業發展署、臺北市商業處）──
+    # 收緊「商業」裸比對為具體單位，避免未來如「商業銀行」類來源誤入此分支。
+    if "經濟部" in src or "商業處" in src or "商業發展署" in src or law in _GCIS_LAW_CODES:
+        law_code = _GCIS_LAW_CODES.get(law, "")
+        if not law_code:
+            return ""
+        if article:
+            # 「之」與「-」皆為子條號分隔（第172條之1 = 第172-1條），正規化為 dash。
+            # Playwright 親驗 art=172&dash=1 內容即第172條之1 全文。
+            flno = article.replace("第", "").replace("條", "").replace("之", "-").strip()
+            art, dash = (flno.split("-", 1) + ["0"])[:2]
+            if art.isdigit() and (law_code, art, dash) not in _GCIS_REPEALED_ARTICLES:
+                return _GCIS_CONSTRUCTION_URL.format(lawCode=law_code, art=art, dash=dash)
+        return _GCIS_LAW_VIEW_URL.format(lawCode=law_code)
+    # ── MOL 勞動部函釋（FLAWDOC03 全文內容頁，只需 N2=純數字文號）──
+    # 限「勞動部」避免誤抓「臺北市勞動檢查處」「臺北市政府勞動局」等地方機關。
+    if "勞動部" in src and ref_no:
+        ecase, eno = _parse_mol_refno(ref_no)
+        if ecase and eno:
+            return _MOL_HANSHI_URL.format(eno=eno)
     return ""
 
 
@@ -190,6 +222,14 @@ def derive_attributes(filename: str, law_index=None, first_line: str = None,
             body_url = extract_url_from_body(body_text or "")
             if body_url:
                 attrs["url"] = body_url
+            else:
+                inst_url = construct_institutional_url(
+                    doc_type, attrs.get("source", ""), law, article,
+                    ref_no=attrs.get("ref_no", ""),
+                    effective_date=attrs.get("effective_date", ""),
+                )
+                if inst_url:
+                    attrs["url"] = inst_url
         return attrs
 
     m = _FILENAME_RE.match(stem)
