@@ -56,6 +56,88 @@ def _parse_first_line(first_line: str) -> dict:
 # 官方單一條文頁 URL 模板（全國法規資料庫）。
 _LAW_SINGLE_URL = "https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode={pcode}&flno={flno}"
 
+# 不是有效語料來源頁的 domain，extract_url_from_body 應忽略。
+_IGNORED_URL_DOMAINS = {"law.moj.gov.tw", "210.69.121.50", "gcis.nat.gov.tw"}
+
+# 機構 → 法規查詢入口頁（construct_institutional_url 用）。
+_INSTITUTIONAL_URLS = {
+    "gcis": "https://gcis.nat.gov.tw/elaw/lawDtlAction.do?method=lawToCons&pk=19&art={art}&dash={dash}",
+    "gcis_home": "https://gcis.nat.gov.tw/elaw/",
+    "fsc": "https://law.fsc.gov.tw/",
+    "mol": "https://laws.mol.gov.tw/",
+    "pdpc": "https://www.pdpc.gov.tw/",
+    "ftc": "https://www.ftc.gov.tw/",
+    "cpc": "https://cpc.ey.gov.tw/",
+    "sfb": "https://www.sfb.gov.tw/",
+    "amld": "https://www.amld.moj.gov.tw/",
+}
+
+
+def _is_homepage_url(url: str) -> bool:
+    """URL 是否僅為機構首頁（domain + optional /，無有意義的 path）。"""
+    after_domain = re.sub(r'^https?://(www\.)?[^/]+', '', url)
+    return after_domain in ('', '/')
+
+
+def extract_url_from_body(body_text: str) -> str:
+    """從檔案內文提取官方來源 deep link URL。
+
+    搜尋 body 中的 http/https URL，排除 law.moj.gov.tw（法條頁非來源頁）
+    及僅為機構首頁的 URL（使用者期望點開即到原始內容頁），
+    去除尾端中文標點，回傳第一個符合的 URL。無則回空字串。
+    """
+    if not body_text:
+        return ""
+    for m in re.finditer(r'https?://[^\s<>）\)，。、；：]+', body_text):
+        url = m.group(0).rstrip("）)，。、；：")
+        domain = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
+        if domain in _IGNORED_URL_DOMAINS:
+            continue
+        if _is_homepage_url(url):
+            continue
+        return url
+    return ""
+
+
+def construct_institutional_url(doc_type: str, source: str, law: str, article: str) -> str:
+    """從 metadata 建構機構法規查詢頁 URL。
+
+    判決走 /api/source_vs，不給 URL。其餘依來源機構對應。
+    公司法函釋特殊：有對應條號時建構 GCIS 逐條函釋頁。
+    """
+    if doc_type in ("判決", "裁罰"):
+        return ""
+    src = source or ""
+    if "經濟部" in src or law == "商業登記法":
+        if law == "公司法" and article:
+            flno = article.replace("第", "").replace("條", "").strip()
+            if "-" in flno:
+                parts = flno.split("-", 1)
+                return _INSTITUTIONAL_URLS["gcis"].format(art=parts[0], dash=parts[1])
+            return _INSTITUTIONAL_URLS["gcis"].format(art=flno, dash="0")
+        return _INSTITUTIONAL_URLS["gcis_home"]
+    if "金管會" in src or "金融監督" in src:
+        return _INSTITUTIONAL_URLS["fsc"]
+    if "勞動" in src:
+        return _INSTITUTIONAL_URLS["mol"]
+    if "個人資料保護" in src or "個資" in src or "國家發展委員會" in src or "國發會" in src:
+        return _INSTITUTIONAL_URLS["pdpc"]
+    if "公平交易" in src:
+        return _INSTITUTIONAL_URLS["ftc"]
+    if "消費者保護" in src:
+        return _INSTITUTIONAL_URLS["cpc"]
+    if "法務部" in src:
+        if "洗錢" in law:
+            return _INSTITUTIONAL_URLS["amld"]
+        return ""
+    if "臺北市" in src and "商業" in src:
+        return _INSTITUTIONAL_URLS["gcis_home"]
+    if "臺北市" in src and "勞動" in src:
+        return _INSTITUTIONAL_URLS["mol"]
+    if "證券" in src or "期貨" in src:
+        return _INSTITUTIONAL_URLS["sfb"]
+    return ""
+
 
 def article_to_flno(article: str) -> str:
     """條號 → flno：'第12條'→'12'、'第1-1條'→'1-1'、'第7條'→'7'。
@@ -67,13 +149,14 @@ def article_to_flno(article: str) -> str:
     return article.replace("第", "").replace("條", "").strip()
 
 
-def derive_attributes(filename: str, law_index=None, first_line: str = None) -> dict:
+def derive_attributes(filename: str, law_index=None, first_line: str = None,
+                       body_text: str = None) -> dict:
     """從檔名（與非條文素材的首行 metadata）解析 per-file attributes（值皆為 str，≤16 鍵）。
 
     條文/施行細則：{法規名稱}-第N條.txt → law/article/category/doc_type/source(+url)。
     非條文（函釋/FAQ/判決/裁罰）：{簡稱}-{doc_type}-{標題}.txt，doc_type 由檔名定，
     其餘（母法/字號/發文日/對應條號/來源）由 first_line 取，category 由母法對應。
-    若提供 law_index 且 pcode/條號齊備，加官方原文 url。解析不到退回安全預設。
+    URL 優先級：metadata url: → body 內提取 → 機構查詢頁建構。
     """
     stem = Path(filename).stem  # 去副檔名
 
@@ -99,11 +182,14 @@ def derive_attributes(filename: str, law_index=None, first_line: str = None) -> 
         eff = meta.get("發文日") or meta.get("發布日") or meta.get("裁判日")
         if eff:
             attrs["effective_date"] = eff
-        # URL：非條文素材的「對應條號」只是參考標籤，不能用來組法條頁 URL。
-        # 優先採用 metadata 中的 url 欄位（若有）；否則不設 url（前端自動隱藏連結）。
+        # URL 優先級：metadata url: → body 提取 → 機構查詢頁建構。
         meta_url = meta.get("url", "")
         if meta_url and meta_url.startswith("http"):
             attrs["url"] = meta_url
+        else:
+            body_url = extract_url_from_body(body_text or "")
+            if body_url:
+                attrs["url"] = body_url
         return attrs
 
     m = _FILENAME_RE.match(stem)
@@ -202,7 +288,7 @@ def main():
             skipped_empty += 1
             continue
         first_line = text.splitlines()[0] if text.splitlines() else ""
-        attributes = derive_attributes(p.name, law_index=law_index, first_line=first_line)
+        attributes = derive_attributes(p.name, law_index=law_index, first_line=first_line, body_text=text)
         # 附加模式：法條已在既有 store，只上傳新語料（施行細則/函釋/FAQ…），避免重複。
         if append_mode and attributes["doc_type"] == "法條":
             skipped_existing += 1

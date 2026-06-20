@@ -149,7 +149,7 @@ def test_derive_attributes_no_url_when_pcode_missing():
 # --- FAQ/函釋 不應用法條 URL（bug fix）--------------------------------------
 
 def test_faq_should_not_get_law_article_url():
-    """FAQ 的「對應條號」只是參考標籤，不能用來組法條 URL。"""
+    """FAQ 的「對應條號」只是參考標籤，不能用來組法條 URL；無 deep link 則無 url。"""
     law_index = {"勞動基準法": "N0030001"}
     first = "來源:勞動部 | 效力:FAQ | 發布日:2023-01-01 | 對應條號:第24條 | 母法:勞動基準法"
     attrs = derive_attributes("勞動-FAQ-加班費如何計算.txt",
@@ -159,7 +159,7 @@ def test_faq_should_not_get_law_article_url():
 
 
 def test_hanshi_should_not_get_law_article_url():
-    """函釋的「對應條號」只是參考標籤，不能用來組法條 URL。"""
+    """函釋的「對應條號」只是參考標籤，不能用來組法條 URL；無 deep link 則無 url。"""
     law_index = {"證券交易法": "G0400001"}
     first = ("來源:金管會 | 效力:函釋 | 字號:金管銀法字第10300212700號 | "
              "發文日:2014-03-05 | 對應條號:第41條 | 母法:證券交易法")
