@@ -28,7 +28,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app import config
 from app.capability import load_manifest
-from app.db import Feedback, QueryLog, make_session_factory
+from app.db import Feedback, QueryLog, get_db_status, init_db, make_session_factory
 from app.rag import answer_question, astream_answer, suggest_followups
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,22 @@ app = FastAPI(title="法規 RAG 問答")
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.on_event("startup")
+def on_startup():
+    """應用啟動時顯式初始化資料庫表。
+
+    確保 query_logs / feedback 表在第一個請求到來前已存在，
+    解決 Railway UI 顯示 "relation does not exist" 的問題。
+    無 DATABASE_URL 時（本地開發 / 測試）靜默跳過。
+    """
+    if _DATABASE_URL:
+        try:
+            init_db(_DATABASE_URL)
+        except Exception as exc:  # noqa: BLE001 - DB 初始化失敗不可阻止 app 啟動
+            logger.error("on_startup: init_db 失敗（app 仍繼續啟動）: %s", exc)
+            _capture(exc)
 
 
 @app.get("/")
@@ -271,11 +287,60 @@ def source_vs(file_id: str):
         raise HTTPException(status_code=404, detail="原文取回失敗") from exc
     if not text.strip():
         raise HTTPException(status_code=404, detail="原文為空")
-    return {"file_id": file_id, "text": text}
-
 
 # ---------- /api/feedback ----------
 @app.post("/api/feedback")
 def feedback(req: FeedbackRequest):
     save_feedback(req.query_log_id, req.rating)
     return {"status": "ok"}
+
+
+# ---------- /api/admin/* ----------
+
+@app.get("/api/admin/db-status")
+def admin_db_status():
+    """診斷端點：回傳資料庫連接狀態與表存在情況。
+
+    用於替代 Railway UI 無法連接時的診斷工具。
+    回傳：connected（bool）、tables（各表是否存在）、error（最近錯誤訊息）。
+    """
+    if not _DATABASE_URL:
+        return {"connected": False, "tables": {}, "error": "DATABASE_URL 未設定"}
+    return get_db_status(_DATABASE_URL)
+
+
+@app.get("/api/admin/query-logs")
+def admin_query_logs(limit: int = 100):
+    """管理端點：回傳最近 N 筆查詢日誌（預設 100）。
+
+    用於替代 Railway UI 無法連接時直接查看資料庫數據。
+    limit 上限 500，防止單次回傳過大。
+    """
+    if SessionLocal is None:
+        raise HTTPException(status_code=503, detail="資料庫未設定")
+    limit = min(limit, 500)
+    with SessionLocal() as s:
+        rows = (
+            s.query(QueryLog)
+            .order_by(QueryLog.id.desc())
+            .limit(limit)
+            .all()
+        )
+    return {
+        "count": len(rows),
+        "logs": [
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "question": r.question,
+                "answer": r.answer,
+                "citation_count": r.citation_count,
+                "has_answer": r.has_answer,
+                "latency_ms": r.latency_ms,
+                "model": r.model,
+                "total_tokens": r.total_tokens,
+                "error": r.error,
+            }
+            for r in rows
+        ],
+    }
